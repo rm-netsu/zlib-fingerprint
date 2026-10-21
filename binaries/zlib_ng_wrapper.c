@@ -1,3 +1,10 @@
+/* zlib_ng_wrapper.c — stdin-to-stdout compressor around zlib-ng (compat API).
+ *
+ * One-shot compression (read everything, single Z_FINISH) to mirror the
+ * flush pattern of the most common producers. See zlib_wrapper.c.
+ *
+ * Usage: zlib_ng_wrapper [level] [memLevel] [strategy]   (windowBits = 15)
+ */
 #include <stdio.h>
 #include <stdlib.h>
 #include <zlib.h>
@@ -6,8 +13,6 @@
 #include <fcntl.h>
 #include <io.h>
 #endif
-
-#define CHUNK 16384
 
 int main(int argc, char *argv[]) {
     #ifdef _WIN32
@@ -23,41 +28,63 @@ int main(int argc, char *argv[]) {
     if (argc > 2) memLevel = atoi(argv[2]);
     if (argc > 3) strategy = atoi(argv[3]);
 
+    size_t capacity = 1 << 20;
+    size_t size = 0;
+    unsigned char *in_buf = malloc(capacity);
+    if (!in_buf) return 1;
+    for (;;) {
+        if (size == capacity) {
+            capacity *= 2;
+            unsigned char *nb = realloc(in_buf, capacity);
+            if (!nb) { free(in_buf); return 1; }
+            in_buf = nb;
+        }
+        size_t n = fread(in_buf + size, 1, capacity - size, stdin);
+        size += n;
+        if (n == 0) break;
+    }
+
     z_stream strm;
     strm.zalloc = Z_NULL;
     strm.zfree = Z_NULL;
     strm.opaque = Z_NULL;
 
-    // Инициализация с учетом особенностей zlib-ng compat API
     if (deflateInit2(&strm, level, Z_DEFLATED, 15, memLevel, strategy) != Z_OK) {
-        return 1;
+        free(in_buf);
+        return 2;
     }
 
-    unsigned char in[CHUNK];
-    unsigned char out[CHUNK];
-    int flush;
+    size_t out_capacity = deflateBound(&strm, (uLong)size) + 64;
+    unsigned char *out_buf = malloc(out_capacity);
+    if (!out_buf) {
+        deflateEnd(&strm);
+        free(in_buf);
+        return 3;
+    }
 
-    do {
-        strm.avail_in = fread(in, 1, CHUNK, stdin);
-        if (ferror(stdin)) {
-            deflateEnd(&strm);
-            return 2;
-        }
-        flush = feof(stdin) ? Z_FINISH : Z_NO_FLUSH;
-        strm.next_in = in;
+    strm.next_in = in_buf;
+    strm.avail_in = (uInt)size;
+    strm.next_out = out_buf;
+    strm.avail_out = (uInt)out_capacity;
 
-        do {
-            strm.avail_out = CHUNK;
-            strm.next_out = out;
-            deflate(&strm, flush);
-            unsigned int have = CHUNK - strm.avail_out;
-            if (fwrite(out, 1, have, stdout) != have || ferror(stdout)) {
-                deflateEnd(&strm);
-                return 3;
-            }
-        } while (strm.avail_out == 0);
-    } while (flush != Z_FINISH);
+    int ret = deflate(&strm, Z_FINISH);
+    if (ret != Z_STREAM_END) {
+        deflateEnd(&strm);
+        free(out_buf);
+        free(in_buf);
+        return 4;
+    }
+
+    size_t have = out_capacity - strm.avail_out;
+    if (fwrite(out_buf, 1, have, stdout) != have) {
+        deflateEnd(&strm);
+        free(out_buf);
+        free(in_buf);
+        return 5;
+    }
 
     deflateEnd(&strm);
+    free(out_buf);
+    free(in_buf);
     return 0;
 }

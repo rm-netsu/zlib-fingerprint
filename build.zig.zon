@@ -1,9 +1,8 @@
 .{
     .name = .zlib_fingerprint,
     .version = "2.0.0",
-    .fingerprint = 0x55e2b0c01114d1b9,
+    .fingerprint = 0x55e2b0c0c6d95fe8,
     .minimum_zig_version = "0.16.0",
-    .dependencies = .{},
     .paths = .{
         "build.zig",
         "build.zig.zon",

@@ -337,11 +337,14 @@ pub const Compressor = struct {
         return input_len + (input_len >> 2) + (1 << 16) + 4096 + 16384;
     }
 
-    /// Compress `input` exactly like the historical zlib-<version> wrapper
-    /// binaries do: 16384-byte input chunks, 16384-byte output chunks,
-    /// Z_NO_FLUSH per chunk and one final Z_FINISH call. The resulting
-    /// stream is byte-identical to `zlib-<version> <level> <memLevel>
-    /// <strategy> <windowBits>` with zlib wrap=1.
+    /// Compress `input` exactly like the one-shot wrapper binaries do: the
+    /// whole payload as a single input buffer and one deflate(Z_FINISH) call
+    /// chain until Z_STREAM_END. The resulting stream is byte-identical to
+    /// `zlib-<version> <level> <memLevel> <strategy> <windowBits>` with zlib
+    /// wrap=1, and to the most common real-world producers (zlib.compress in
+    /// Python, deflateSync in Node, ...). For levels 1-9 the call pattern is
+    /// byte-neutral; for level 0 (deflate_stored) the block layout depends
+    /// on it, which is why the one-shot pattern is the modeled one.
     pub fn compress(
         self: *Compressor,
         version: Version,
@@ -398,40 +401,50 @@ pub const Compressor = struct {
         s.reset(level, strategy);
         s.trailer_written = false;
 
-        // The wrapper's call pattern.
+        // One-shot call pattern: the whole input is handed to deflate with a
+        // single Z_FINISH. For levels 1-9 output chunking is byte-neutral,
+        // so the driver drains 16 KiB chunks to keep the early-abort
+        // reference comparison cheap. Level 0 (deflate_stored, 1.2.10+) is
+        // the exception: its block layout is avail_out-dependent — the
+        // one-shot wrapper binaries hand deflate the whole output buffer in
+        // a single call, so that is exactly what must be emulated.
         const chunk = 16384;
-        var in_pos: usize = 0;
         var out_pos: usize = 0;
-        while (true) {
-            const remaining = input.len - in_pos;
-            const take = @min(remaining, chunk);
-            const is_last = (in_pos + take) == input.len;
+        s.input = input;
+        s.next_in = 0;
+        s.avail_in = @intCast(input.len);
 
-            s.input = input;
-            s.next_in = in_pos;
-            s.avail_in = @intCast(take);
-
-            const flush: u32 = if (is_last) tables.Z_FINISH else tables.Z_NO_FLUSH;
-
-            while (true) {
-                if (out_pos + chunk > output.len) return error.OutputTooSmall;
-                s.output = output;
-                s.next_out = out_pos;
-                s.avail_out = chunk;
-                _ = pump(s, flush, variant);
-                const have = chunk - s.avail_out;
-                out_pos += have;
-                if (expect) |ref| {
-                    if (out_pos > ref.len) return error.OutputMismatch;
-                    if (!std.mem.eql(u8, output[out_pos - have .. out_pos], ref[out_pos - have .. out_pos])) {
-                        return error.OutputMismatch;
-                    }
-                }
-                if (s.avail_out != 0) break;
+        if (level == 0) {
+            s.output = output;
+            s.next_out = 0;
+            s.avail_out = @intCast(output.len);
+            const r = pump(s, tables.Z_FINISH, variant);
+            out_pos = output.len - s.avail_out;
+            if (r != .stream_end) return error.OutputTooSmall;
+            if (expect) |ref| {
+                if (out_pos != ref.len) return error.OutputMismatch;
+                if (!std.mem.eql(u8, output[0..out_pos], ref)) return error.OutputMismatch;
             }
+            return out_pos;
+        }
 
-            in_pos += take;
-            if (is_last) break;
+        while (true) {
+            if (out_pos + chunk > output.len) return error.OutputTooSmall;
+            s.output = output;
+            s.next_out = out_pos;
+            s.avail_out = chunk;
+            const r = pump(s, tables.Z_FINISH, variant);
+            const have = chunk - s.avail_out;
+            out_pos += have;
+            if (expect) |ref| {
+                if (out_pos > ref.len) return error.OutputMismatch;
+                if (!std.mem.eql(u8, output[out_pos - have .. out_pos], ref[out_pos - have .. out_pos])) {
+                    return error.OutputMismatch;
+                }
+            }
+            if (r == .stream_end) break;
+            // Every .ok return of pump() implies a full output buffer.
+            if (s.avail_out != 0) return error.OutputTooSmall;
         }
         if (expect) |ref| {
             if (out_pos != ref.len) return error.OutputMismatch;

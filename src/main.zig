@@ -1,415 +1,280 @@
-//! zlib-fingerprint — CLI entry point.
+//! zlib-fingerprint — identify the compressor implementation and parameters
+//! that produced a zlib (RFC 1950) stream, by bit-exact brute force.
 //!
-//! Zig 0.16 port of the original TypeScript tool. Analyzes a zlib stream
-//! (RFC 1950), inflates it, then brute-forces external compressor binaries
-//! (zlib, zlib-ng, Zopfli, libdeflate, miniz, ...) to find the exact
-//! implementation and parameters that reproduce the stream bit-for-bit.
+//! The search order is driven by the stream's own metadata (CINFO, FLEVEL,
+//! FDICT, FCHECK, first DEFLATE block type), which keeps convergence fast:
+//! a default-level stream matches on the very first candidate.
 
 const std = @import("std");
-const fingerprint = @import("fingerprint.zig");
+const hints = @import("hints.zig");
 const profiles_mod = @import("profiles.zig");
-const ui_mod = @import("ui.zig");
+const fingerprint = @import("fingerprint.zig");
+const ui = @import("ui.zig");
 
-const Color = ui_mod.Color;
-const Ui = ui_mod.Ui;
+const usage_text =
+    \\Usage: zlib-fingerprint [options] <compressed_file>
+    \\
+    \\Identifies the compressor implementation and parameter set
+    \\(level, memLevel, strategy, windowBits, iterations) that produced a
+    \\zlib (RFC 1950) stream, by brute-forcing known implementations until
+    \\the output matches the input bit-exactly.
+    \\
+    \\The enumeration order is driven by the stream's own metadata:
+    \\CINFO (windowBits), FLEVEL (level/strategy class), FDICT and the
+    \\first DEFLATE block type.
+    \\
+    \\By default stock zlib candidates are re-compressed in-process by the
+    \\integrated engine, which reproduces zlib 1.2.3-1.3.1 bit-exactly.
+    \\
+    \\Options:
+    \\  -v, --verbose    print every candidate attempt
+    \\      --no-color   disable ANSI colors
+    \\      --paranoid   force the windowBits sweep even for canonical headers
+    \\      --external-zlib  spawn per-version zlib binaries instead of the
+    \\                       integrated engine
+    \\      --binaries <dir>  directory with compressor binaries
+    \\                       (default: ./binaries)
+    \\  -h, --help       show this help
+    \\
+    \\Exit codes: 0 = match found, 1 = no match / failure, 2 = usage error.
+    \\
+;
 
-// ---------------------------------------------------------------------------
-// zlib stream analysis (port of main.ts helpers).
-// ---------------------------------------------------------------------------
-
-const ZlibHeaderInfo = struct {
-    compression_method: u8,
-    window_size: u32,
-    window_bits: u8,
-    header_valid: bool,
-    has_dictionary: bool,
-    dictionary_id: ?u32,
-    flevel_hint: u8,
-    flevel_description: []const u8,
+const Options = struct {
+    verbose: bool = false,
+    no_color: bool = false,
+    paranoid: bool = false,
+    external_zlib: bool = false,
+    binaries_dir: ?[]const u8 = null,
+    file: ?[]const u8 = null,
+    help: bool = false,
 };
 
-const flevel_descriptions = [_][]const u8{
-    "Fastest algorithm",
-    "Fast algorithm",
-    "Default algorithm",
-    "Maximum compression",
-};
-
-/// Detailed parse of the zlib header (RFC 1950).
-fn analyzeZlibStream(buffer: []const u8) error{TooShort}!ZlibHeaderInfo {
-    if (buffer.len < 2) return error.TooShort;
-
-    const cmf = buffer[0];
-    const flg = buffer[1];
-
-    const header_valid = (@as(u32, cmf) * 256 + @as(u32, flg)) % 31 == 0;
-    const compression_method = cmf & 0x0f;
-    const cinfo = (cmf >> 4) & 0x0f;
-
-    // zlib window size (256..32768 bytes); windowBits = cinfo + 8.
-    const window_bits = cinfo + 8;
-    const window_size = @as(u32, 1) << @intCast(window_bits);
-
-    const has_dictionary = (flg & 0x20) != 0;
-    const flevel_hint = (flg >> 6) & 0x03;
-
-    var dictionary_id: ?u32 = null;
-    if (has_dictionary and buffer.len >= 6) {
-        dictionary_id = std.mem.readInt(u32, buffer[2..6], .big);
-    }
-
-    return .{
-        .compression_method = compression_method,
-        .window_size = window_size,
-        .window_bits = window_bits,
-        .header_valid = header_valid,
-        .has_dictionary = has_dictionary,
-        .dictionary_id = dictionary_id,
-        .flevel_hint = flevel_hint,
-        .flevel_description = flevel_descriptions[flevel_hint],
-    };
-}
-
-const btype_names = [_][]const u8{
-    "Stored (uncompressed)",
-    "Fixed Huffman",
-    "Dynamic Huffman",
-    "Reserved (invalid)",
-};
-
-/// Quick scan of the first DEFLATE block to characterize stream structure.
-fn printDeflateBlocks(ui: *Ui, buffer: []const u8) void {
-    ui.print("\n", .{});
-    ui.cprint(.bold, "--- Deflate Stream Structure (First blocks scan) ---\n", .{});
-    if (buffer.len > 2) {
-        const first_byte = buffer[2];
-        const bfinal = first_byte & 0x01;
-        const btype = (first_byte >> 1) & 0x03;
-        ui.print("- First Block BFINAL : {d}\n", .{bfinal});
-        ui.print("- First Block BTYPE  : {d} ({s})\n", .{ btype, btype_names[btype] });
-    }
-    ui.print("--------------------------------------------------\n\n", .{});
-}
-
-fn printZlibHeaderInfo(ui: *Ui, info: ZlibHeaderInfo) void {
-    ui.print("\n", .{});
-    ui.cprint(.bold, "=== Zlib Header Metadata (RFC 1950) ===\n", .{});
-    ui.print("- Header Valid (FCHECK) : {s}\n", .{if (info.header_valid) "Yes (OK)" else "No (Corrupt or custom)"});
-    ui.print("- Compression Method    : {d}\n", .{info.compression_method});
-    ui.print("- Window Size           : {d} bytes (windowBits = {d})\n", .{ info.window_size, info.window_bits });
-    if (info.has_dictionary) {
-        if (info.dictionary_id) |id| {
-            ui.print("- Preset Dictionary     : Yes (ID: {d})\n", .{id});
+fn parseArgs(init: std.process.Init, arena: std.mem.Allocator) !Options {
+    var opts = Options{};
+    // initAllocator is the cross-platform constructor (Windows needs heap
+    // buffers for WTF-16 -> WTF-8 conversion); the arena owns them, and every
+    // argument is duped into the arena because the iterator may reallocate
+    // its internal buffer while advancing.
+    var it = try std.process.Args.Iterator.initAllocator(init.minimal.args, arena);
+    _ = it.next(); // skip argv[0]
+    while (it.next()) |raw| {
+        const a: []const u8 = try arena.dupe(u8, raw);
+        if (std.mem.eql(u8, a, "-v") or std.mem.eql(u8, a, "--verbose")) {
+            opts.verbose = true;
+        } else if (std.mem.eql(u8, a, "--no-color")) {
+            opts.no_color = true;
+        } else if (std.mem.eql(u8, a, "--paranoid")) {
+            opts.paranoid = true;
+        } else if (std.mem.eql(u8, a, "--external-zlib")) {
+            opts.external_zlib = true;
+        } else if (std.mem.eql(u8, a, "--binaries")) {
+            const next = it.next() orelse return error.Usage;
+            opts.binaries_dir = next;
+        } else if (std.mem.eql(u8, a, "-h") or std.mem.eql(u8, a, "--help")) {
+            opts.help = true;
+        } else if (a.len > 1 and a[0] == '-') {
+            return error.Usage;
         } else {
-            ui.print("- Preset Dictionary     : Yes (ID unavailable)\n", .{});
+            if (opts.file != null) return error.Usage;
+            opts.file = a;
         }
+    }
+    return opts;
+}
+
+fn printAnalysis(rep: *ui.Reporter, h: hints.Header, first_block: ?hints.BlockInfo, compressed_len: usize, uncompressed_len: usize) void {
+    rep.line("", .{});
+    rep.line("=== Zlib Header Metadata (RFC 1950) ===", .{});
+    rep.line("- Header Valid (FCHECK) : {s}", .{if (h.fcheck_ok) "Yes (OK)" else "No (corrupt or custom writer)"});
+    rep.line("- Compression Method    : {d}{s}", .{ h.cm, if (h.cm == 8) " (deflate)" else " (unknown!)" });
+    rep.line("- Window Size           : {d} bytes (windowBits = {d})", .{ @as(usize, 1) << @intCast(h.window_bits), h.window_bits });
+    if (h.fdict) {
+        rep.line("- Preset Dictionary     : Yes (DICTID = {x:0>8})", .{h.dict_id orelse 0});
     } else {
-        ui.print("- Preset Dictionary     : None\n", .{});
+        rep.line("- Preset Dictionary     : None", .{});
     }
-    ui.print("- Compression Level Hint: {s} ({d})\n", .{ info.flevel_description, info.flevel_hint });
-    ui.print("========================================\n\n", .{});
+    rep.line("- Compression Level Hint: {s} (FLEVEL = {d})", .{ h.flevelName(), h.flevel });
+    rep.line("- Header Class          : {s}", .{if (h.canonical()) "canonical (produced by a stock zlib-family implementation)" else "non-canonical"});
+    if (first_block) |fb| {
+        const names = [_][]const u8{ "Stored (uncompressed)", "Fixed Huffman", "Dynamic Huffman", "Reserved (invalid)" };
+        rep.line("- First DEFLATE Block   : BFINAL={d}, BTYPE={d} ({s})", .{ fb.bfinal, fb.btype, names[fb.btype] });
+    }
+    rep.line("- Sizes                 : {d} -> {d} bytes", .{ compressed_len, uncompressed_len });
+    rep.line("=======================================", .{});
 }
 
-// ---------------------------------------------------------------------------
-// Inflation via std.compress.flate (zlib container).
-// ---------------------------------------------------------------------------
-
-const InflateError = error{ OutOfMemory, StreamTooLong } || std.compress.flate.Decompress.Error;
-
-fn inflateZlib(
-    gpa: std.mem.Allocator,
-    compressed: []const u8,
-    max_len: usize,
-) InflateError![]u8 {
-    var in_reader: std.Io.Reader = .fixed(compressed);
-    var window: [std.compress.flate.max_window_len]u8 = undefined;
-    var dec: std.compress.flate.Decompress = .init(&in_reader, .zlib, &window);
-    return dec.reader.allocRemaining(gpa, .limited(max_len)) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        error.StreamTooLong => return error.StreamTooLong,
-        error.ReadFailed => return dec.err orelse error.EndOfStream,
-    };
-}
-
-// ---------------------------------------------------------------------------
-// Search event observer (drives the colored CLI output).
-// ---------------------------------------------------------------------------
-
-const Observer = struct {
-    ui: *Ui,
-    verbose: bool,
-
-    fn handle(context: ?*anyopaque, event: fingerprint.Event) void {
-        const self: *Observer = @ptrCast(@alignCast(context.?));
-        switch (event) {
-            .phase_start => |p| {
-                self.ui.clearProgress();
-                self.ui.print("\n", .{});
-                self.ui.setColor(.bold);
-                self.ui.setColor(.cyan);
-                self.ui.print("-- {s}\n", .{p.title});
-                self.ui.setColor(.reset);
-            },
-            .phase_end => |p| {
-                _ = p;
-                self.ui.clearProgress();
-            },
-            .attempt => |a| {
-                if (self.verbose) {
-                    if (a.matched) {
-                        self.ui.cprint(.green, "  [#{d:0>4}] {s} -> MATCH FOUND!\n", .{ a.attempt_no, a.description });
-                    } else {
-                        self.ui.cprint(.bright_black, "  [#{d:0>4}] {s} -> mismatch\n", .{ a.attempt_no, a.description });
-                    }
-                } else {
-                    if (a.block_total > 0) {
-                        self.ui.progress("  {s} {s}: {d}/{d}", .{ a.phase_tag, a.profile_name, a.index_in_block, a.block_total });
-                    } else {
-                        self.ui.progress("  {s} {s}", .{ a.phase_tag, a.profile_name });
-                    }
-                }
-            },
+fn printSearchPlan(rep: *ui.Reporter, h: hints.Header, fb: ?hints.BlockInfo, level0_ok: bool) void {
+    rep.line("", .{});
+    rep.line("Metadata-driven search plan:", .{});
+    switch (h.flevel) {
+        0 => rep.line("- FLEVEL=0  -> probing level 1 (default/filtered) and huffman-only/rle/fixed strategies first", .{}),
+        1 => rep.line("- FLEVEL=1  -> probing levels 5, 4, 3, 2 first", .{}),
+        2 => rep.line("- FLEVEL=2  -> probing level 6 (default) first", .{}),
+        else => rep.line("- FLEVEL=3  -> probing levels 9, 8, 7 first", .{}),
+    }
+    rep.line("- windowBits fixed to CINFO+8 = {d} while the header stays trusted", .{h.window_bits});
+    if (fb) |b| {
+        if (b.btype == 0 and level0_ok) {
+            rep.line("- stored first block -> level 0 probe scheduled at the front", .{});
         }
     }
-};
-
-// ---------------------------------------------------------------------------
-// CLI entry point.
-// ---------------------------------------------------------------------------
+    if (!h.canonical()) {
+        rep.line("- non-canonical header -> windowBits sweep enabled for stage 3", .{});
+    }
+    rep.line("", .{});
+}
 
 pub fn main(init: std.process.Init) !u8 {
-    const io = init.io;
     const gpa = init.gpa;
+    const io = init.io;
 
-    var arena_state = std.heap.ArenaAllocator.init(gpa);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
+    // Command line strings live for the whole run; an arena keeps the
+    // cross-platform args iterator allocations out of the leak report.
+    var args_arena = std.heap.ArenaAllocator.init(gpa);
+    defer args_arena.deinit();
 
-    // -- stdout UI ----------------------------------------------------------
-    const out_buf = try arena.alloc(u8, 16 * 1024);
-    const fw_storage = try arena.create(std.Io.File.Writer);
-    const setup = try ui_mod.setupStdout(io, out_buf, fw_storage, init.environ_map);
-    var ui = setup.ui;
+    const opts = parseArgs(init, args_arena.allocator()) catch {
+        std.debug.print("zlib-fingerprint: invalid arguments\n{s}", .{usage_text});
+        return 2;
+    };
+    if (opts.help) {
+        std.debug.print("{s}", .{usage_text});
+        return 0;
+    }
+    const file_path = opts.file orelse {
+        std.debug.print("{s}", .{usage_text});
+        return 2;
+    };
 
-    // -- command line -------------------------------------------------------
-    const args = try init.minimal.args.toSlice(arena);
-    // args[0] is the program name.
+    var stdout_buf: [1 << 15]u8 = undefined;
+    var stdout_writer = std.Io.File.stdout().writer(io, &stdout_buf);
+    const stdout = &stdout_writer.interface;
 
-    var is_verbose = false;
-    var external_zlib = false;
-    var positional: std.ArrayList([]const u8) = .empty;
-    for (args[1..]) |arg| {
-        if (std.mem.eql(u8, arg, "--verbose") or std.mem.eql(u8, arg, "-v")) {
-            is_verbose = true;
-            continue;
+    const tty = std.Io.File.stdout().isTty(io) catch false;
+    const color = blk: {
+        if (opts.no_color) break :blk false;
+        if (init.environ_map.get("NO_COLOR") != null) break :blk false;
+        if (init.environ_map.get("CLICOLOR_FORCE")) |v| {
+            if (v.len > 0 and !std.mem.eql(u8, v, "0")) break :blk true;
         }
-        if (std.mem.eql(u8, arg, "--external-zlib")) {
-            external_zlib = true;
-            continue;
-        }
-        try positional.append(arena, arg);
-    }
-
-    if (positional.items.len < 1) {
-        ui.cprint(.yellow, "Usage: zlib-fingerprint [--verbose | -v] [--external-zlib] <compressed_file>\n", .{});
-        ui.cprint(.yellow, "  --external-zlib  spawn historical zlib binaries instead of the integrated engine\n", .{});
-        return 1;
-    }
-
-    const cwd_path = std.process.currentPathAlloc(io, arena) catch "";
-
-    const compressed_path = resolvePath(arena, cwd_path, positional.items[0]) catch {
-        std.debug.print("Error: failed to resolve path.\n", .{});
-        return 1;
+        break :blk tty;
     };
 
-    if (!pathExists(io, compressed_path)) {
-        std.debug.print("Error: Compressed file not found: {s}\n", .{compressed_path});
+    var rep = ui.Reporter.init(stdout, color, tty, opts.verbose);
+
+    // ---- Read the stream --------------------------------------------------
+    const compressed = std.Io.Dir.cwd().readFileAlloc(io, file_path, gpa, .limited(1 << 31)) catch |err| {
+        rep.line("error: cannot read '{s}': {s}", .{ file_path, @errorName(err) });
+        return 1;
+    };
+    defer gpa.free(compressed);
+    if (compressed.len < 3) {
+        rep.line("error: file is too short to be a zlib stream", .{});
         return 1;
     }
 
-    const original_compressed = std.Io.Dir.cwd().readFileAlloc(io, compressed_path, arena, .limited(1 << 30)) catch |err| {
-        std.debug.print("Error: failed to read file: {t}\n", .{err});
+    const base = std.Io.Dir.path.basename(file_path);
+    rep.line("Analyzing zlib stream: {s} ({d} bytes)", .{ base, compressed.len });
+
+    // ---- Header analysis --------------------------------------------------
+    const header = hints.parseHeader(compressed) catch |err| {
+        rep.line("error: cannot parse zlib header: {s}", .{@errorName(err)});
         return 1;
     };
+    const first_block = hints.firstBlockInfo(compressed);
 
-    ui.print("Analyzing zlib stream for: ", .{});
-    ui.setColor(.bold);
-    ui.print("{s}\n", .{std.fs.path.basename(compressed_path)});
-    ui.setColor(.reset);
-
-    if (analyzeZlibStream(original_compressed)) |info| {
-        printZlibHeaderInfo(&ui, info);
-    } else |_| {
-        std.debug.print("Warning: Could not fully parse zlib header: Buffer is too short to contain a valid zlib header.\n", .{});
+    if (header.cm != 8) {
+        rep.line("error: not a deflate stream (CM={d}) - nothing to fingerprint", .{header.cm});
+        return 1;
+    }
+    if (header.fdict) {
+        rep.line("error: stream requires a preset dictionary (DICTID={x:0>8}); decompression and", .{header.dict_id orelse 0});
+        rep.line("       bit-exact reproduction are impossible without that exact dictionary.", .{});
+        return 1;
     }
 
-    printDeflateBlocks(&ui, original_compressed);
+    // ---- Inflate ----------------------------------------------------------
+    rep.line("Decompressing stream to extract the uncompressed payload...", .{});
+    var window: [std.compress.flate.max_window_len]u8 = undefined;
+    var in_reader = std.Io.Reader.fixed(compressed);
+    var decomp: std.compress.flate.Decompress = .init(&in_reader, .zlib, &window);
+    var uncompressed: std.ArrayList(u8) = .empty;
+    defer uncompressed.deinit(gpa);
+    var chunk: [65536]u8 = undefined;
+    while (true) {
+        const n = decomp.reader.readSliceShort(&chunk) catch |err| {
+            rep.line("error: inflate failed: {s} (corrupt or unsupported stream)", .{@errorName(err)});
+            return 1;
+        };
+        if (n == 0) break;
+        uncompressed.appendSlice(gpa, chunk[0..n]) catch return 1;
+    }
+    rep.line("Successfully unpacked: {d} bytes of raw data.", .{uncompressed.items.len});
 
-    ui.print("Decompressing stream to extract uncompressed data...\n", .{});
+    printAnalysis(&rep, header, first_block, compressed.len, uncompressed.items.len);
+    printSearchPlan(&rep, header, first_block, fingerprint.level0Possible(compressed.len, uncompressed.items.len));
 
-    const uncompressed = inflateZlib(arena, original_compressed, 1 << 31) catch |err| {
-        std.debug.print(
-            "Error: Failed to inflate zlib stream. Ensure the file contains a valid zlib-compressed stream.\nDetails: {t}\n",
-            .{err},
-        );
-        return 1;
-    };
-
-    ui.print("Successfully unpacked: {d} bytes of raw data.\n\n", .{uncompressed.len});
-
-    // -- locate the binaries directory ---------------------------------------
-    // Original resolved `<dist>/../binaries`; the native binary looks for
-    // `binaries/` next to the executable itself.
-    const binaries_dir = try resolveBinariesDir(arena, io, cwd_path);
-    const profiles = try profiles_mod.getProfiles(arena, binaries_dir, external_zlib);
-
-    if (external_zlib) {
-        ui.print("Starting parameter search across {d} external compressor profiles...\n", .{profiles.len});
+    // ---- Search -----------------------------------------------------------
+    const binaries_dir = opts.binaries_dir orelse "binaries";
+    const available_count = fingerprint.countAvailable(io, binaries_dir, opts.external_zlib);
+    if (opts.external_zlib) {
+        rep.line("Mode: external binaries only ({d}/{d} available, integrated engine disabled)", .{
+            available_count, profiles_mod.profiles.len - 1,
+        });
     } else {
-        ui.print(
-            "Starting parameter search across {d} profiles (integrated zlib 1.2.3-1.3.1 engine + {d} external)...\n",
-            .{ profiles.len, profiles.len - 1 },
-        );
+        rep.line("Mode: integrated zlib 1.2.3-1.3.1 engine + external alternatives ({d}/{d} available)", .{
+            available_count, profiles_mod.profiles.len,
+        });
     }
+    rep.line("", .{});
 
-    // -- run the search ------------------------------------------------------
-    var observer = Observer{ .ui = &ui, .verbose = is_verbose };
-    var ctx: fingerprint.Ctx = .{
-        .gpa = gpa,
-        .result_alloc = arena,
-        .io = io,
-        .notifier = .{ .context = &observer, .notifyFn = &Observer.handle },
+    const match = fingerprint.findExactMatch(
+        gpa,
+        io,
+        compressed,
+        uncompressed.items,
+        header,
+        first_block,
+        .{ .binaries_dir = binaries_dir, .paranoid = opts.paranoid, .external_zlib = opts.external_zlib },
+        &rep,
+    ) catch |err| blk: {
+        rep.line("search error: {s}", .{@errorName(err)});
+        break :blk null;
     };
-
-    const match = fingerprint.findExactMatch(&ctx, original_compressed, uncompressed, profiles);
-
-    ui.clearProgress();
 
     if (match) |m| {
-        ui.print("\n", .{});
-        ui.cprint(.green, "[SUCCESS] Bit-exact match found!\n", .{});
-        ui.print("- Implementation: {s}\n", .{m.tool_name});
-        ui.print("- Binary path: {s}\n", .{m.binary_path});
-        ui.print("- Parameters: {s}\n", .{m.params_summary});
-        ui.print("- Attempts: {d}\n", .{ctx.attempts});
-    } else {
-        ui.print("\n", .{});
-        ui.cprint(.yellow, "[RESULT] No bit-exact match was found by any of the available binaries.\n", .{});
-        ui.print("Tested {d} compressor invocations.\n", .{ctx.attempts});
+        rep.line("", .{});
+        rep.line("[SUCCESS] Bit-exact match found!", .{});
+        rep.line("- Implementation: {s}", .{m.profile.name});
+        rep.line("- Stage         : {s}", .{m.stage.label()});
+        switch (m.profile.impl_type) {
+            .integrated, .zlib_family => rep.line("- Parameters    : level={d}, memLevel={d}, strategy={s}, windowBits={d}", .{
+                m.level, m.mem_level, profiles_mod.STRATEGY_NAMES[@min(m.strategy, 4)], m.window_bits,
+            }),
+            .zopfli => rep.line("- Parameters    : iterations={d}", .{m.iterations}),
+            .libdeflate, .miniz => rep.line("- Parameters    : level={d}", .{m.level}),
+            .advdef => rep.line("- Parameters    : level=-{d}", .{m.level}),
+        }
+        if (m.version_range.len > 0) {
+            rep.line("- Versions      : {s} (integrated engine)", .{m.version_range});
+        }
+        rep.line("- Convergence   : {d} attempt{s}, {d} ms", .{
+            m.attempts, if (m.attempts == 1) "" else "s", m.elapsed_ms,
+        });
+        return 0;
     }
 
-    return 0;
-}
-
-// ---------------------------------------------------------------------------
-// Small filesystem / env helpers.
-// ---------------------------------------------------------------------------
-
-/// Same semantics as Node's `path.resolve(cwd, p)`.
-fn resolvePath(arena: std.mem.Allocator, cwd_path: []const u8, p: []const u8) ![]u8 {
-    if (std.fs.path.isAbsolute(p) or cwd_path.len == 0) {
-        return std.fs.path.resolve(arena, &.{p});
-    }
-    return std.fs.path.resolve(arena, &.{ cwd_path, p });
-}
-
-fn pathExists(io: std.Io, path: []const u8) bool {
-    if (std.fs.path.isAbsolute(path)) {
-        std.Io.Dir.accessAbsolute(io, path, .{}) catch return false;
-    } else {
-        std.Io.Dir.cwd().access(io, path, .{}) catch return false;
-    }
-    return true;
-}
-
-/// Resolves the external-binaries directory: `<exe_dir>/binaries` when it
-/// exists, falling back to `<cwd>/binaries`, then to plain `./binaries`.
-fn resolveBinariesDir(arena: std.mem.Allocator, io: std.Io, cwd_path: []const u8) ![]const u8 {
-    var exe_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    const exe_len: usize = if (io.vtable.processExecutablePath(io.userdata, &exe_buf)) |n| n else |_| 0;
-
-    if (exe_len > 0) {
-        const exe_path = try arena.dupe(u8, exe_buf[0..exe_len]);
-        const dir = std.fs.path.dirname(exe_path) orelse ".";
-        const candidate = try std.fs.path.join(arena, &.{ dir, "binaries" });
-        if (std.Io.Dir.accessAbsolute(io, candidate, .{})) |_| {
-            return candidate;
-        } else |_| {}
-    }
-
-    if (cwd_path.len > 0) {
-        const candidate = try std.fs.path.join(arena, &.{ cwd_path, "binaries" });
-        if (std.Io.Dir.accessAbsolute(io, candidate, .{})) |_| {
-            return candidate;
-        } else |_| {}
-        return candidate;
-    }
-    return "binaries";
-}
-
-// ---------------------------------------------------------------------------
-// Tests.
-// ---------------------------------------------------------------------------
-
-test "analyzeZlibStream parses a valid header" {
-    // 0x78 0xda: CM=8, CINFO=7 (32K window), FLEVEL=3, FDICT=0, FCHECK ok.
-    const stream = [_]u8{ 0x78, 0xda, 0x01, 0x02, 0x03 };
-    const info = try analyzeZlibStream(&stream);
-    try std.testing.expectEqual(@as(u8, 8), info.compression_method);
-    try std.testing.expectEqual(@as(u8, 15), info.window_bits);
-    try std.testing.expectEqual(@as(u32, 32768), info.window_size);
-    try std.testing.expect(info.header_valid);
-    try std.testing.expect(!info.has_dictionary);
-    try std.testing.expect(info.dictionary_id == null);
-    try std.testing.expectEqualStrings("Maximum compression", info.flevel_description);
-}
-
-test "analyzeZlibStream rejects short buffers" {
-    try std.testing.expectError(error.TooShort, analyzeZlibStream(&.{0x78}));
-    try std.testing.expectError(error.TooShort, analyzeZlibStream(&.{}));
-}
-
-test "analyzeZlibStream detects preset dictionary" {
-    // FDICT set (0x20); checksum bits adjusted so CMF*256+FLG stays %31==0.
-    // 0x78*256 + 0xbb = 30907 = 31 * 997 -> valid.
-    const stream = [_]u8{ 0x78, 0xbb, 0xAA, 0xBB, 0xCC, 0xDD, 0x00 };
-    const info = try analyzeZlibStream(&stream);
-    try std.testing.expect(info.has_dictionary);
-    try std.testing.expectEqual(@as(u32, 0xAABBCCDD), info.dictionary_id.?);
-}
-
-test "inflateZlib inflates a known-good stream" {
-    const compressed = [_]u8{
-        0x78, 0xda, 0xcd, 0x8c, 0xb1, 0x0d, 0x80, 0x30, 0x0c, 0x04, 0x57, 0x79,
-        0x7a, 0x60, 0x8e, 0x0c, 0x40, 0x45, 0x17, 0x90, 0x43, 0x2c, 0x99, 0x24,
-        0xb2, 0x0d, 0x05, 0xd3, 0x13, 0x31, 0x05, 0xd2, 0x5d, 0x77, 0xba, 0x40,
-        0x22, 0x75, 0xc4, 0x23, 0xbc, 0x4d, 0x89, 0xcb, 0x41, 0xda, 0x94, 0x8b,
-        0x0f, 0x58, 0x32, 0x1b, 0x3a, 0x11, 0x76, 0x46, 0x11, 0x38, 0x99, 0xe3,
-        0xa6, 0xdd, 0xab, 0x22, 0x75, 0x3d, 0x13, 0x56, 0x3e, 0xd0, 0xaa, 0x3a,
-        0xae, 0xc2, 0xfe, 0x15, 0x36, 0x87, 0xdf, 0x0f, 0x5f, 0xc4, 0x8d, 0x57,
-        0xc1,
-    };
-    const expected = "Hello, zlib-fingerprint! This is a small test vector for the Zig port unit tests." ** 3;
-
-    const testing = std.testing;
-
-    const out = try inflateZlib(testing.allocator, &compressed, 1 << 20);
-    defer testing.allocator.free(out);
-    try testing.expectEqualSlices(u8, expected, out);
-}
-
-test "inflateZlib rejects a corrupt stream" {
-    const testing = std.testing;
-
-    const bad = [_]u8{ 0x78, 0xda, 0xff, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0x01, 0x02 };
-    const result = inflateZlib(testing.allocator, &bad, 1 << 20);
-    try testing.expect(std.meta.isError(result));
+    rep.line("", .{});
+    rep.line("[RESULT] No bit-exact match was found by any available implementation.", .{});
+    return 1;
 }
 
 test {
-    std.testing.refAllDecls(@This());
+    _ = @import("hints.zig");
     _ = @import("profiles.zig");
     _ = @import("fingerprint.zig");
     _ = @import("ui.zig");
+    _ = @import("deflate/deflate.zig");
+    std.testing.refAllDecls(@This());
 }

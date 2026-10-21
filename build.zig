@@ -14,10 +14,28 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(exe);
 
+    // Development tool: compress stdin exactly like the historical
+    // zlib-<version> wrapper binaries (differential verification harness
+    // for the integrated deflate engine).
+    const zcompress = b.addExecutable(.{
+        .name = "zcompress",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/zcompress.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    zcompress.root_module.addImport("deflate", b.createModule(.{
+        .root_source_file = b.path("src/deflate/deflate.zig"),
+        .target = target,
+        .optimize = optimize,
+    }));
+    b.installArtifact(zcompress);
+
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
     if (b.args) |args| run_cmd.addArgs(args);
-    const run_step = b.step("run", "Run the CLI");
+    const run_step = b.step("run", "Run the fingerprint search");
     run_step.dependOn(&run_cmd.step);
 
     const unit_tests = b.addTest(.{
