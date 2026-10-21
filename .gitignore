@@ -1,0 +1,8 @@
+zig-out/
+.zig-cache/
+
+# Binaries in the binaries/ folder (keep the README, ignore binaries)
+binaries/*
+!binaries/README.md
+!binaries/download-binaries.sh
+!binaries/*.c
