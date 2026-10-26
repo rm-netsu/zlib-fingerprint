@@ -1,0 +1,177 @@
+{
+  "1.0.5 / 1.0.6": {
+    "output": {
+      "fixture": "repeat-65535",
+      "level": 0,
+      "mem": 8,
+      "strategy": 0,
+      "window": 15,
+      "out_chunk": 64,
+      "status": [
+        0,
+        0
+      ],
+      "length": [
+        65551,
+        65551
+      ]
+    },
+    "api": {
+      "fixture": "periodic-1024",
+      "level": 0,
+      "mem": 1,
+      "strategy": 0,
+      "window": 9,
+      "out_chunk": 64,
+      "status": [
+        -11,
+        0
+      ],
+      "length": [
+        0,
+        1045
+      ]
+    },
+    "shared_successes": 816
+  },
+  "1.0.9 / 1.1.0": {
+    "output": null,
+    "api": null,
+    "shared_successes": 896
+  },
+  "1.2.0 / 1.2.1": {
+    "output": {
+      "fixture": "empty",
+      "level": 0,
+      "mem": 1,
+      "strategy": 0,
+      "window": 9,
+      "out_chunk": 64,
+      "status": [
+        0,
+        0
+      ],
+      "length": [
+        11,
+        11
+      ]
+    },
+    "api": {
+      "fixture": "empty",
+      "level": 0,
+      "mem": 1,
+      "strategy": 3,
+      "window": 9,
+      "out_chunk": 64,
+      "status": [
+        2,
+        0
+      ],
+      "length": [
+        0,
+        11
+      ]
+    },
+    "shared_successes": 896
+  },
+  "1.2.2 / 1.2.3": {
+    "output": null,
+    "api": null,
+    "shared_successes": 1344
+  },
+  "1.2.3 / 1.2.4": {
+    "output": {
+      "fixture": "repeat-32",
+      "level": 1,
+      "mem": 1,
+      "strategy": 3,
+      "window": 9,
+      "out_chunk": 64,
+      "status": [
+        0,
+        0
+      ],
+      "length": [
+        11,
+        10
+      ]
+    },
+    "api": {
+      "fixture": "repeat-65535",
+      "level": 0,
+      "mem": 1,
+      "strategy": 3,
+      "window": 15,
+      "out_chunk": 64,
+      "status": [
+        0,
+        -6
+      ],
+      "length": [
+        66191,
+        0
+      ]
+    },
+    "shared_successes": 1336
+  },
+  "1.2.8 / 1.2.9": {
+    "output": {
+      "fixture": "empty",
+      "level": 0,
+      "mem": 1,
+      "strategy": 0,
+      "window": 9,
+      "out_chunk": 64,
+      "status": [
+        0,
+        0
+      ],
+      "length": [
+        11,
+        6
+      ]
+    },
+    "api": {
+      "fixture": "repeat-65535",
+      "level": 0,
+      "mem": 1,
+      "strategy": 3,
+      "window": 15,
+      "out_chunk": 64,
+      "status": [
+        -6,
+        0
+      ],
+      "length": [
+        0,
+        66696
+      ]
+    },
+    "shared_successes": 1336
+  },
+  "1.2.9 / 1.2.10": {
+    "output": {
+      "fixture": "empty",
+      "level": 0,
+      "mem": 1,
+      "strategy": 0,
+      "window": 9,
+      "out_chunk": 64,
+      "status": [
+        0,
+        0
+      ],
+      "length": [
+        6,
+        11
+      ]
+    },
+    "api": null,
+    "shared_successes": 1344
+  },
+  "1.3.1 / 1.3.2": {
+    "output": null,
+    "api": null,
+    "shared_successes": 1344
+  }
+}

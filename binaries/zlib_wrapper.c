@@ -7,11 +7,15 @@
  * the block splitting depends on the flush pattern, so the wrapper must
  * not stream the input through in chunks.
  *
- * Usage: zlib_wrapper [level] [memLevel] [strategy] [windowBits]
+ * Usage: zlib_wrapper [level] [memLevel] [strategy] [windowBits] [outChunk]
+ * Optional outChunk caps avail_out per deflate(Z_FINISH) call to investigate
+ * output-buffer-dependent historical differences. Omitted = one call.
  * Both the wrapper and the linked libz.a define the fingerprinted version.
  */
 #include <stdio.h>
 #include <stdlib.h>
+#include <limits.h>
+#include <stdint.h>
 #include <zlib.h>
 
 #ifdef _WIN32
@@ -29,11 +33,13 @@ int main(int argc, char *argv[]) {
     int memLevel = 8;
     int strategy = Z_DEFAULT_STRATEGY;
     int windowBits = 15;
+    size_t out_chunk = 0;
 
     if (argc > 1) level = atoi(argv[1]);
     if (argc > 2) memLevel = atoi(argv[2]);
     if (argc > 3) strategy = atoi(argv[3]);
     if (argc > 4) windowBits = atoi(argv[4]);
+    if (argc > 5) out_chunk = (size_t)strtoul(argv[5], NULL, 10);
 
     /* Read the whole input. */
     size_t capacity = 1 << 20;
@@ -62,7 +68,15 @@ int main(int argc, char *argv[]) {
         return 2;
     }
 
-    size_t out_capacity = deflateBound(&strm, (uLong)size) + 64;
+    /* deflateBound() was introduced after the earliest supported releases.
+     * An oversized one-shot buffer is sufficient even for stored/Huffman
+     * worst cases, and preserves the output-buffer-sensitive level-0 path. */
+    if (size > UINT_MAX || size > (SIZE_MAX - 65536) / 2) {
+        deflateEnd(&strm);
+        free(in_buf);
+        return 3;
+    }
+    size_t out_capacity = size * 2 + 65536;
     unsigned char *out_buf = malloc(out_capacity);
     if (!out_buf) {
         deflateEnd(&strm);
@@ -72,10 +86,18 @@ int main(int argc, char *argv[]) {
 
     strm.next_in = in_buf;
     strm.avail_in = (uInt)size;
-    strm.next_out = out_buf;
-    strm.avail_out = (uInt)out_capacity;
-
-    int ret = deflate(&strm, Z_FINISH);
+    if (!out_chunk || out_chunk > out_capacity) out_chunk = out_capacity;
+    size_t have = 0;
+    int ret;
+    do {
+        size_t remaining = out_capacity - have;
+        size_t chunk = out_chunk < remaining ? out_chunk : remaining;
+        if (!chunk) { ret = Z_BUF_ERROR; break; }
+        strm.next_out = out_buf + have;
+        strm.avail_out = (uInt)chunk;
+        ret = deflate(&strm, Z_FINISH);
+        have += chunk - strm.avail_out;
+    } while (ret == Z_OK);
     if (ret != Z_STREAM_END) {
         deflateEnd(&strm);
         free(out_buf);
@@ -83,7 +105,6 @@ int main(int argc, char *argv[]) {
         return 4;
     }
 
-    size_t have = out_capacity - strm.avail_out;
     if (fwrite(out_buf, 1, have, stdout) != have) {
         deflateEnd(&strm);
         free(out_buf);

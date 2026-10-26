@@ -31,7 +31,7 @@ mkdir -p "$VENDOR"
 fetch() { # fetch <url> <dest-file>
     if [ ! -f "$2" ]; then
         echo "   downloading $(basename "$2")..."
-        curl -L --retry 3 --max-time 300 -o "$2" "$1"
+        curl -fL --retry 3 --max-time 300 -o "$2" "$1"
     fi
 }
 
@@ -63,16 +63,36 @@ build_zlib() { # build_zlib <version> <url>
 }
 
 GITHUB_ZLIB="https://github.com/madler/zlib/archive/refs/tags"
+# Historical, potentially bitstream-distinct releases. These are deliberately
+# NOT marked covered by the integrated 1.2.3+ engine. The old 1.0/1.1
+# tarballs come from the upstream zlib fossils archive.
+for ver in 1.0.1 1.0.2 1.0.4 1.0.5 1.0.6 1.0.7 1.0.8 1.0.9 \
+           1.1.0 1.1.1 1.1.2 1.1.3 1.1.4; do
+    build_zlib "$ver" "https://zlib.net/fossils/zlib-$ver.tar.gz"
+done
+for ver in 1.2.0 1.2.1 1.2.2; do
+    build_zlib "$ver" "$GITHUB_ZLIB/v$ver.tar.gz"
+done
 build_zlib "1.2.3"  "$GITHUB_ZLIB/v1.2.3.tar.gz"
+build_zlib "1.2.4"  "$GITHUB_ZLIB/v1.2.4.tar.gz"
 build_zlib "1.2.5"  "$GITHUB_ZLIB/v1.2.5.tar.gz"
+build_zlib "1.2.6"  "$GITHUB_ZLIB/v1.2.6.tar.gz"
 build_zlib "1.2.7"  "$GITHUB_ZLIB/v1.2.7.tar.gz"
 build_zlib "1.2.8"  "$GITHUB_ZLIB/v1.2.8.tar.gz"
+build_zlib "1.2.9"  "$GITHUB_ZLIB/v1.2.9.tar.gz"
+build_zlib "1.2.10" "$GITHUB_ZLIB/v1.2.10.tar.gz"
 build_zlib "1.2.11" "$GITHUB_ZLIB/v1.2.11.tar.gz"
 build_zlib "1.2.12" "$GITHUB_ZLIB/v1.2.12.tar.gz"
 build_zlib "1.2.13" "$GITHUB_ZLIB/v1.2.13.tar.gz"
 build_zlib "1.3"    "$GITHUB_ZLIB/v1.3.tar.gz"
 build_zlib "1.3.1"  "https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz"
 build_zlib "1.3.2"  "$GITHUB_ZLIB/v1.3.2.tar.gz"
+
+# Differential matrix can build only stock zlib releases, without fetching
+# optional third-party implementations.
+if [[ "${ZLIB_ONLY:-0}" == "1" ]]; then
+    exit 0
+fi
 
 # ---------------------------------------------------------------------------
 # zlib-ng 2.2.1 (compat API)
