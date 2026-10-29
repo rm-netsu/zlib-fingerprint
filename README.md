@@ -1,5 +1,10 @@
 # zlib-fingerprint
 
+**Historical release equivalence audit:** see [EQUIVALENCE.md](EQUIVALENCE.md)
+for the 30-version, 306,000-invocation differential experiment, including
+new pre-1.2.3 classes, the 1.3.2 check, and the output-buffer-dependent
+1.2.9/1.2.10 distinction.
+
 Identify the compressor implementation, version and parameter set that
 produced a zlib (RFC 1950) stream — by bit-exact brute force.
 
@@ -62,7 +67,8 @@ way (all mappings verified empirically, see `src/hints.zig`):
    `(level, memLevel, strategy)` combinations whose FLEVEL class matches
    the header, at `windowBits = CINFO + 8`, ordered by proximity to the
    hinted class. Zopfli iterations and the libdeflate/miniz level ranges
-   run here, filtered by their header mappings.
+   run here, filtered by their header mappings. `--extended-zopfli` adds
+   uncommon Zopfli iteration counts only after the standard candidates.
 3. **windowBits distrust sweep** — only when the header is non-canonical
    (invalid FCHECK, CINFO=0) or when `--paranoid` is passed. With a
    canonical header a differing windowBits emits different header bytes,
@@ -72,14 +78,87 @@ Duplicate candidates across stages are eliminated through a visited set.
 
 ## The integrated zlib engine
 
-By default, stock zlib candidates are **not** spawned as binaries: they
-are re-compressed in-process by `src/deflate/` — a bit-exact
-reimplementation of historical zlib deflate covering every stock release
-**1.2.3 – 1.3.1**. Mismatching candidates abort at the first divergent
-output chunk, which keeps the full matrix fast (thousands of attempts per
-second even on multi-hundred-KB inputs).
+By default, stock zlib candidates are **not** spawned as binaries. The
+modern 1.2.3–1.3.2 classes **and class D (1.2.1–1.2.2)** run through the
+shared native Zig engine in `src/deflate/`; the three earlier classes
+(A–C, 1.0.1–1.2.0) still use original historical C deflate sources compiled
+and linked directly into the program (`src/legacy/`). Class D's C source is
+retained as a differential reference. No old zlib DLL or subprocess is required.
+The behavior targets the tested one-shot `Z_FINISH` producer model.
+The modern Zig engine aborts mismatches at the first divergent output chunk.
 
-### Where the output actually changed (1.2.3 → 1.3.1)
+### Zopfli historical releases 1.0.0 – 1.0.3 (fully native Zig port)
+
+Zopfli is available in the default fingerprint search **in-process**,
+without a subprocess, a Zopfli executable, or any linked C kernel — for
+**every official historical release**: 1.0.0, 1.0.1, 1.0.2 and 1.0.3.
+Each release's RFC 1950 envelope and Adler checksum are native Zig
+(reusing the existing shared checksum), and the complete optimizer — bit
+output, rolling hash, longest-match cache, LZ77 token-store lifecycle,
+greedy/lazy parsing, optimal-path reconstruction, symbol statistics with
+deterministic frequency perturbation, forward dynamic-programming
+optimization, iterative squeeze, block splitting, the bounded
+package-merge length-limited Huffman kernel (`katajainen.zig`), block cost
+evaluation and full DEFLATE serialization — runs in native Zig. Options
+replicate upstream `util.c`'s `ZopfliInitOptions`; libc is linked only for
+`malloc`/`free`/`log`, and no algorithmic upstream C source is compiled
+into the build. The upstream 1.0.3 distribution remains in
+`binaries/vendor/zopfli-zopfli-1.0.3/` as the independent reference and
+audit baseline.
+
+The release behaviour differences are reproduced explicitly through the
+`ZopfliRelease` variant (`src/zopfli/release.zig`), never through a mutable
+global switch:
+
+| Aspect | 1.0.0 | 1.0.1 | 1.0.2 / 1.0.3 |
+|---|---|---|---|
+| RFC 1950 header | `78 01` (FLEVEL=0) | `78 01` | `78 da` (FLEVEL=3) |
+| Dynamic tree encoding | fixed RLE strategy | 8-strategy search | 8-strategy search |
+| Histogram RLE optimization | none | always | try both, keep smaller |
+| Block type selection | dynamic/fixed only | dynamic/fixed only | auto (stored/fixed/dynamic) |
+| Block splitting cost | dynamic-only | dynamic-only | auto-type |
+| Master block size | 20,000,000 | 20,000,000 | 1,000,000 |
+| Empty input | CLI refuses (no stream) | CLI refuses | fixed empty block |
+
+1.0.2 and 1.0.3 share one code path: their only source difference is a
+`malloc` cast in `deflate.c` with no observable effect for any admissible
+length; the byte-level matrix confirms byte-identity across the whole
+corpus, and the search collapses 1.0.2 into the 1.0.3 representative while
+reporting the group range `zopfli 1.0.2-1.0.3` on a match.
+
+The regression `python3 scripts/diff_zopfli_native.py` compares the native
+variants against the independent release CLIs (356/356 byte-exact in the
+delivery environment; each matched stream also round-trips through zlib
+decompression), and the dedicated kernel differential
+`python3 scripts/diff_katajainen.py` passed 4042/4042 byte-exact vectors
+against the original `katajainen.c`. The full byte-level equivalence
+matrix of the four releases (`python3 scripts/version_matrix.py`) is
+described in `EQUIVALENCE.md`; its report is in `version-matrix.json`.
+See `src/zopfli/README.md` for module boundaries.
+
+A deterministic iteration probe (`python3 scripts/probe_zopfli_iterations.py
+--max-iteration 30 --stress`) found no extra unique Zopfli output when
+testing 1–30 and 50 iterations across six fixtures: four fixtures produced
+one distinct stream, two produced two streams already covered by the defaults.
+Consequently extra iterations are opt-in, avoiding a large increase in search
+cost for the usual case.
+
+### Verifying the native port
+
+After building the project and the original reference wrappers in `binaries/`:
+
+```sh
+python3 scripts/audit_native_port.py
+python3 scripts/diff_native_class_d.py
+python3 scripts/diff_legacy_native.py
+```
+
+The expanded native audit compared **22,506** original/native runs across
+all 15 releases from 1.2.2 through 1.3.2 without a mismatch. Its per-release
+results are in `native-port-audit.json`; limitations and test parameters
+are described in `EQUIVALENCE.md`.
+
+### Where the output actually changed (1.2.3 → 1.3.2)
 
 Established by diffing every release and by a ~29 000-combination
 differential matrix over 13 compiled historical versions:
@@ -103,7 +182,7 @@ across the entire range and lives in shared modules only.
 ### Output-equivalence classes
 
 ```text
-{ 1.2.3 }  { 1.2.4-1.2.8 }  { 1.2.9 }  { 1.2.10-1.3.1 }
+{ 1.2.3 }  { 1.2.4-1.2.8 }  { 1.2.9 }  { 1.2.10-1.3.2 }
 ```
 
 The search tries the minimal set of representatives per parameter
@@ -111,7 +190,7 @@ combination (`collapseGroups`): one for most combinations, two for
 Z_HUFFMAN_ONLY / Z_RLE (1.2.3 vs 1.2.4+ block states) and up to four at
 level 0 (three stored-block generations). A match is reported with the
 honest version range the representative reproduces, e.g.
-`level=6, memLevel=8, strategy=default, windowBits=15, zlib 1.2.3-1.3.1`.
+`level=6, memLevel=8, strategy=default, windowBits=15, zlib 1.2.3-1.3.2`.
 
 ### Producer semantics
 
@@ -137,18 +216,36 @@ that path only in the stage-3 sweep, and this port models the idealized
 
 | Profile | Type | Parameters |
 |---------|------|------------|
-| zlib (integrated), 1.2.3 – 1.3.1 | in-process | full `level memLevel strategy windowBits` matrix |
-| zlib 1.3.2 | external binary | `level memLevel strategy windowBits` |
-| zlib 1.2.3 / 1.2.5 / 1.2.7 / 1.2.8 / 1.2.11 / 1.2.12 / 1.2.13 / 1.3 / 1.3.1 | external binaries | same; skipped in the default mode (covered bit-exactly by the integrated engine), enabled by `--external-zlib` |
+| zlib (integrated), 1.2.3 – 1.3.2 | in-process | full `level memLevel strategy windowBits` matrix; 1.3.2 covered in tested one-shot model |
+| zlib class D, 1.2.1–1.2.2 | native Zig (shared 1.2.3 engine, historical strategy limits) | verified with original 1.2.2 oracle; all releases available with `--external-zlib` |
+| zlib classes A–C, 1.0.1–1.2.0 | in-process, statically linked historical C | one built-in representative per class; native Zig port pending |
+| zlib 1.2.3 / 1.2.5 / 1.2.7 / 1.2.8 / 1.2.11 / 1.2.12 / 1.2.13 / 1.3 / 1.3.1 / 1.3.2 | external binaries | skipped in default mode (integrated); enabled with `--external-zlib` |
 | zlib-ng 2.2.1 (compat) | external binary | `level memLevel strategy`, windowBits fixed to 15 |
-| Zopfli 1.0.3 | external binary | `--zlib -c --iN <file>`; header is always `0x78 0xDA` |
+| Zopfli 1.0.3 / 1.0.2 / 1.0.1 / 1.0.0 | in-process | release-specific behaviour (header, tree encoder, block selection); 1.0.2 collapsed into the 1.0.3 representative (byte-identical), reported as `zopfli 1.0.2-1.0.3` |
+| Zopfli 1.0.3 | external binary | `--zlib -c --iN <file>`; header `0x78 0xDA`; enabled with `--external-zlib` |
 | libdeflate 1.20 | external binary | `level` (1–12) |
 | miniz 3.1.2 | external binary | `level` (1–10) |
 | AdvanceCOMP 2.6 advdef | external binary | `-L -z -k` on a temp file; last resort |
 
 Missing binaries are detected once up front and their profiles are
-skipped. Without any binaries at all, the tool still fingerprints every
-stock zlib 1.2.3–1.3.1 stream.
+skipped. Without any external binaries, the tool fingerprints all eight
+historical stock zlib classes from 1.0.1–1.3.2 in the tested one-shot model.
+
+The earlier classes are A (1.0.1–1.0.5), B (1.0.6–1.0.9), C
+(1.1.0–1.2.0) and D (1.2.1–1.2.2). Their in-process priority is
+**D → C → B → A**, after modern stock zlib; external alternatives follow.
+`--external-zlib` instead audits individual historical binaries. For safety,
+level 0 with strategy 2/3 and class A level 0 with memLevel below 8 are
+excluded from the native C paths pending sanitizer checks; these unusual
+combinations can still be investigated with external binaries.
+
+The pre-1.2.3 releases are not classified as equivalent to modern zlib:
+their DEFLATE output may differ, and their header/strategy behavior has
+not been exhaustively characterized. Therefore their candidate headers are **not** rejected by
+the modern zlib FLEVEL prediction. In normal mode they use statically
+linked original sources. Exact per-release audit still uses optional
+binaries from `binaries/build-binaries.sh`. The pre-1.0 experimental series is
+not included, nor are unreleased source snapshots.
 
 The external zlib wrappers compress **one-shot** (read all input, single
 `Z_FINISH`), matching the integrated engine's producer model. Even so,
@@ -163,8 +260,10 @@ Requires [Zig 0.16.0](https://ziglang.org/download/).
 
 ```sh
 zig build -Doptimize=ReleaseFast
-# Windows cross-compilation:
+# Cross-compilation (verified by build; run-verification requires the OS):
 zig build -Doptimize=ReleaseFast -Dtarget=x86_64-windows-gnu
+zig build -Doptimize=ReleaseFast -Dtarget=aarch64-linux-gnu
+zig build -Doptimize=ReleaseFast -Dtarget=x86_64-macos
 zig build test          # unit tests
 ```
 
@@ -213,7 +312,7 @@ Metadata-driven search plan:
 - FLEVEL=2  -> probing level 6 (default) first
 - windowBits fixed to CINFO+8 = 15 while the header stays trusted
 
-Mode: integrated zlib 1.2.3-1.3.1 engine + external alternatives (7/16 available)
+Mode: eight integrated stock zlib classes + external alternatives (availability varies)
 
 ==> Stage 1: metadata-guided pass (6 candidates)
 
@@ -221,7 +320,7 @@ Mode: integrated zlib 1.2.3-1.3.1 engine + external alternatives (7/16 available
 - Implementation: zlib (integrated)
 - Stage         : Stage 1: metadata-guided pass
 - Parameters    : level=6, memLevel=8, strategy=default, windowBits=15
-- Versions      : zlib 1.2.3-1.3.1 (integrated engine)
+- Versions      : zlib 1.2.3-1.3.2 (integrated engine)
 - Convergence   : 1 attempt, 10 ms
 ```
 
@@ -230,7 +329,7 @@ names the covered zlib version range for the current parameter
 combination):
 
 ```text
-  [attempt     1] P1 zlib (integrated) | lvl=6 mem=8 strat=default wBits=15 [zlib 1.2.3-1.3.1] -> MATCH
+  [attempt     1] P1 zlib (integrated) | lvl=6 mem=8 strat=default wBits=15 [zlib 1.2.3-1.3.2] -> MATCH
 ```
 
 ## Measured convergence
@@ -272,7 +371,7 @@ src/
 ├── profiles.zig       # implementation table (priorities, integrated coverage)
 ├── ui.zig             # SGR colors + live progress
 └── deflate/           # integrated historical zlib engine
-    ├── deflate.zig    # version registry (13 releases / 4 classes), dispatch,
+    ├── deflate.zig    # version registry (1.2.2–1.3.2 / 4 byte-output classes), dispatch,
     │                  # one-shot compressor with early-abort comparison
     ├── state.zig      # shared deflate_state, bit output, window, hash,
     │                  # longest_match, longest_match_fast (1.2.3-only paths)
@@ -280,9 +379,9 @@ src/
     ├── trees.zig      # shared trees.c: block flush, tree building, codes
     ├── stored_legacy.zig  # deflate_stored, zlib 1.2.3-1.2.8  ┐ version-specific
     ├── stored_1_2_9.zig   # deflate_stored, zlib 1.2.9         ├─ generations
-    ├── stored.zig         # deflate_stored, zlib 1.2.10-1.3.1  ┘
+    ├── stored.zig         # deflate_stored, zlib 1.2.10-1.3.2  ┘
     ├── fast.zig / slow.zig          # deflate_fast/slow, zlib 1.2.4+
-    ├── fast_1_2_3.zig / slow_1_2_3.zig  # 1.2.3 variants (strategy dispatch inside)
+    ├── fast_1_2_3.zig / slow_1_2_3.zig  # 1.2.1–1.2.3 variants (shared paths)
     ├── rle.zig        # deflate_rle,   zlib 1.2.4+
     └── huff.zig       # deflate_huff,  zlib 1.2.4+
 tools/
