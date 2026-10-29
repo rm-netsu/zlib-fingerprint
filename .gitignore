@@ -17,3 +17,7 @@ binaries/vendor/*/zopfli
 
 # Local reference binary built from scripts/katajainen_ref.c
 scripts/katajainen_ref
+
+# Delivery artifacts: built executables and downloaded reference tarballs
+outputs/bin-linux-x86_64/
+outputs/zopfli-reference-tarballs/*.tar.gz

@@ -1,0 +1,86 @@
+{
+  "delivery": "zopfli-releases-native-complete",
+  "date": "2026-10-29",
+  "platform": "linux x86_64 (build + run)",
+  "cross_compile_only": ["aarch64-linux-gnu", "x86_64-windows-gnu", "x86_64-macos"],
+  "base_archive": {
+    "name": "zlib-fingerprint-zopfli-1.0.3-native-complete.tar.xz",
+    "sha256": "0d9470426923aa2e8fef6a8f92d1fd3fb0c33f85e916f0ef3690eff72ce3a7bc",
+    "note": "stages 1-2 result, verified before editing"
+  },
+  "releases": {
+    "tags_verified_by": "git ls-remote https://github.com/google/zopfli.git",
+    "tag_list": ["zopfli-1.0.0", "zopfli-1.0.1", "zopfli-1.0.2", "zopfli-1.0.3"],
+    "tarballs": {
+      "zopfli-1.0.0.tar.gz": {
+        "sha256": "386bd801e99bd95f292e7c39fa6a945e4bf1ffec57e16a99024d766fdafb6f96",
+        "tag": "zopfli-1.0.0",
+        "commit": "4975aa5e50761cdeb335b3bf029332df469aa472",
+        "tag_type": "annotated",
+        "build": "gcc src/zopfli/*.c -O2 -W -Wall -Wextra -ansi -pedantic -lm -o zopfli (shipped makefile)",
+        "binary_sha256": "183da228c560a22b703549721dd4dcead4f93018946f06bf42333111070342c9"
+      },
+      "zopfli-1.0.1.tar.gz": {
+        "sha256": "29743d727a4e0ecd1b93e0bf89476ceeb66e809ab2e6ab007a0b0344800e9b4",
+        "tag": "zopfli-1.0.1",
+        "commit": "89cf773beef75d7f4d6d378debdf299378c3314e",
+        "build": "make zopfli (gcc -O2)",
+        "binary_sha256": "73d6e78940f7352d5bf82a257dc34a8c9cb676966afcd4fc2966c839c4bf14c5"
+      },
+      "zopfli-1.0.2.tar.gz": {
+        "sha256": "4a570307c37172d894ec4ef93b6e8e3aacc401e78cbcc51cf85b212dbc379a55",
+        "tag": "zopfli-1.0.2",
+        "commit": "ae43a8b73827577c4b19b005b6eed81f5cf9bbac",
+        "build": "make zopfli (gcc -O2)",
+        "binary_sha256": "9a183b44ac0876fe4082731c040f0ba203acde7b70b2fca282ea1d627a139e6c"
+      },
+      "zopfli-1.0.3.tar.gz": {
+        "sha256": "e955a7739f71af37ef3349c4fa141c648e8775bceb2195be07e86f8e638814bd",
+        "tag": "zopfli-1.0.3",
+        "commit": "bd64b2f0553d4f1ef4e6627647c5d9fc8c71ffc0",
+        "build": "make zopfli (gcc -O2)",
+        "binary_sha256": "a5f9439648f5496f92fe6a7503fc13e4e05f5b844340e322ead3f57efbc32812"
+      }
+    },
+    "vendor_1_0_3_vs_official": "preprocessed output identical except __FILE__/__LINE__ inside asserts; only added #ifdef ZF_NATIVE_* guards"
+  },
+  "checks": [
+    {"name": "unit tests", "command": "zig build test", "result": "86/86 pass"},
+    {"name": "release build", "command": "zig build --release=fast", "result": "ok"},
+    {"name": "release variants vs official CLIs", "command": "python3 scripts/diff_zopfli_native.py", "result": "356/356 bit-exact, all streams round-trip"},
+    {"name": "katajainen kernel vs original C", "command": "python3 scripts/diff_katajainen.py", "result": "4042/4042 byte-exact"},
+    {"name": "byte-level release matrix", "command": "python3 scripts/version_matrix.py (5 chunks) + scripts/merge_matrix.py", "result": "38 inputs, 356 combinations, 0 failures; groups {1.0.0}, {1.0.1}, {1.0.2,1.0.3}", "report": "outputs/version-matrix.json"},
+    {"name": "fingerprint end-to-end per release", "command": "python3 scripts/fingerprint_release_check.py", "result": "27/27 ok; 4 stored-block ambiguity notes (zlib level 9 reproduces stored streams first by prior)"},
+    {"name": "search order justification", "command": "python3 scripts/zopfli_ordering_bench.py", "result": "release variants cost-equivalent per iteration; baseline iterations {1,2,3,5,10,15,50} cover all distinct outputs per release on probe fixtures", "report": "outputs/zopfli-ordering-bench.json"},
+    {"name": "integrated zlib engine regression", "command": "python3 scripts/diff_engine.py", "result": "1080/1080 identical (30 official zlib wrappers built from tags)"},
+    {"name": "legacy class A-D regression", "command": "python3 scripts/diff_legacy_native.py", "result": "9088 comparisons bit-exact"},
+    {"name": "deterministic random run", "command": "matrix inputs random-det-0..5 + diff_zopfli_native seeded corpus", "result": "ok"},
+    {"name": "cross-compile checks", "command": "zig build -Dtarget=<t> --release=fast", "result": "aarch64-linux-gnu ok, x86_64-windows-gnu ok (fixed C stderr dependency), x86_64-macos ok; not executed on those platforms"}
+  ],
+  "equivalence_groups": {
+    "g1": ["zopfli 1.0.0"],
+    "g2": ["zopfli 1.0.1"],
+    "g3": ["zopfli 1.0.2", "zopfli 1.0.3"],
+    "first_distinctions": {
+      "1.0.0|1.0.1": {"input": "periodic-4096", "iterations": 1},
+      "1.0.0|1.0.2": {"input": "empty", "iterations": 1},
+      "1.0.0|1.0.3": {"input": "empty", "iterations": 1},
+      "1.0.1|1.0.2": {"input": "empty", "iterations": 1},
+      "1.0.1|1.0.3": {"input": "empty", "iterations": 1}
+    },
+    "coincidences": {
+      "1.0.0 vs 1.0.1": "38/89 combinations",
+      "1.0.2 vs 1.0.3": "89/89 combinations",
+      "1.0.0 vs 1.0.3": "0/89 combinations",
+      "1.0.1 vs 1.0.3": "0/89 combinations"
+    },
+    "source_analysis": "tag-to-tag diffs + commit history; see EQUIVALENCE.md"
+  },
+  "limitations": [
+    "run-verification only on linux x86_64; other targets compile but were not executed",
+    "matrix iteration set {1,2,3,5,10,15,50} (+1..30 probe); other iterations not covered",
+    "corpus <= 20 MB; larger inputs not covered",
+    "external alternative compressors (zlib-ng/libdeflate/miniz/advdef) not rebuilt: zlib_ng_wrapper.c missing from the received archive, zlib.net fossils behind Cloudflare; zlib regression used 30 official zlib wrappers from tags",
+    "historical results from previous sessions (316 comparisons; 89/89 stage-2) not mixed with new results"
+  ]
+}
