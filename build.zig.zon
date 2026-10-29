@@ -9,6 +9,13 @@
         "src",
         "tools",
         "binaries",
+        "scripts",
         "README.md",
+        "EQUIVALENCE.md",
+        "BACKLOG.md",
+        "equivalence-results.json",
+        "boundary-results.json",
+        "version-matrix.json",
+        "zopfli-ordering-bench.json",
     },
 }

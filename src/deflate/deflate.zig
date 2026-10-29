@@ -18,6 +18,10 @@
 //!   4. deflate_fast / deflate_slow internals (strategy checks inside the
 //!      functions in 1.2.3 — fast_1_2_3.zig / slow_1_2_3.zig).
 //!
+//! The 1.2.1-1.2.2 class D also uses the 1.2.3 compressor on the verified
+//! one-shot-success domain, with a restricted strategy set (no Z_FIXED).
+//! Its original C implementation is retained as an independent test oracle.
+//!
 //! Everything else (longest_match, fill_window, trees/Huffman coding,
 //! tables, adler32, stream framing) is shared code: it never changed the
 //! compressed bytes across the whole range, so single modules serve every
@@ -46,8 +50,9 @@ pub const DeflateState = st.DeflateState;
 pub const dbg_enabled = &trees.dbg_enabled;
 pub const windowGuardBytes = st.windowGuardBytes;
 
-/// All integrated historical zlib versions.
+/// All native Zig deflate versions; 1.2.2 represents empirical class D.
 pub const Version = enum {
+    v1_2_2,
     v1_2_3,
     v1_2_4,
     v1_2_5,
@@ -61,10 +66,12 @@ pub const Version = enum {
     v1_2_13,
     v1_3_0,
     v1_3_1,
+    v1_3_2,
 
     /// "1.2.3" style display name.
     pub fn name(self: Version) []const u8 {
         return switch (self) {
+            .v1_2_2 => "1.2.2",
             .v1_2_3 => "1.2.3",
             .v1_2_4 => "1.2.4",
             .v1_2_5 => "1.2.5",
@@ -78,6 +85,7 @@ pub const Version = enum {
             .v1_2_13 => "1.2.13",
             .v1_3_0 => "1.3",
             .v1_3_1 => "1.3.1",
+            .v1_3_2 => "1.3.2",
         };
     }
 
@@ -87,14 +95,14 @@ pub const Version = enum {
 };
 
 pub const all_versions = [_]Version{
-    .v1_2_3,  .v1_2_4,  .v1_2_5,  .v1_2_6,  .v1_2_7,  .v1_2_8, .v1_2_9,
-    .v1_2_10, .v1_2_11, .v1_2_12, .v1_2_13, .v1_3_0, .v1_3_1,
+    .v1_2_2,  .v1_2_3,  .v1_2_4,  .v1_2_5,  .v1_2_6,  .v1_2_7,  .v1_2_8, .v1_2_9,
+    .v1_2_10, .v1_2_11, .v1_2_12, .v1_2_13, .v1_3_0, .v1_3_1, .v1_3_2,
 };
 
 /// The four distinct compressed-output behaviors ("implementation
-/// variants"). Searching these four covers all 13 versions.
+/// variants"). Class D reuses the 1.2.3 algorithm with earlier API limits.
 pub const Variant = enum {
-    /// zlib 1.2.3: strategy dispatch inside deflate_fast/slow,
+    /// zlib 1.2.1-1.2.3: strategy dispatch inside deflate_fast/slow,
     /// longest_match_fast for Z_RLE, legacy deflate_stored.
     z1_2_3,
     /// zlib 1.2.4-1.2.8: dedicated deflate_huff/deflate_rle, legacy
@@ -103,12 +111,13 @@ pub const Variant = enum {
     /// zlib 1.2.9: rewritten deflate_stored (no final block for empty
     /// input).
     z1_2_9,
-    /// zlib 1.2.10-1.3.1: modern deflate_stored.
+    /// zlib 1.2.10-1.3.2: modern deflate_stored (1.3.2 correspondence
+    /// checked empirically; arbitrary streaming patterns are deferred).
     z1_2_10_plus,
 
     pub fn of(version: Version) Variant {
         return switch (version) {
-            .v1_2_3 => .z1_2_3,
+            .v1_2_2, .v1_2_3 => .z1_2_3,
             .v1_2_4, .v1_2_5, .v1_2_6, .v1_2_7, .v1_2_8 => .z1_2_4_to_1_2_8,
             .v1_2_9 => .z1_2_9,
             else => .z1_2_10_plus,
@@ -121,7 +130,7 @@ pub const Variant = enum {
             .z1_2_3 => "zlib 1.2.3",
             .z1_2_4_to_1_2_8 => "zlib 1.2.4-1.2.8",
             .z1_2_9 => "zlib 1.2.9",
-            .z1_2_10_plus => "zlib 1.2.10-1.3.1",
+            .z1_2_10_plus => "zlib 1.2.10-1.3.2",
         };
     }
 
@@ -135,7 +144,7 @@ pub const Variant = enum {
             .z1_2_3 => .v1_2_3,
             .z1_2_4_to_1_2_8 => .v1_2_8,
             .z1_2_9 => .v1_2_9,
-            .z1_2_10_plus => .v1_3_1,
+            .z1_2_10_plus => .v1_3_2,
         };
     }
 };
@@ -380,7 +389,8 @@ pub const Compressor = struct {
         expect: ?[]const u8,
     ) PumpError!usize {
         if (level > 9 or mem_level < 1 or mem_level > 9 or
-            window_bits < 8 or window_bits > 15 or strategy > tables.Z_FIXED)
+            window_bits < 8 or window_bits > 15 or strategy > tables.Z_FIXED or
+            (version == .v1_2_2 and strategy > tables.Z_RLE))
         {
             return error.InvalidParams;
         }

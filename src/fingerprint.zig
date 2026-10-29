@@ -22,7 +22,7 @@
 //!
 //! zlib-family candidates are executed by the integrated `deflate/` engine
 //! by default: an in-process reimplementation that reproduces the bit-exact
-//! output of every historical stock zlib release 1.2.3 .. 1.3.1, collapsed
+//! output of stock zlib releases 1.2.3 .. 1.3.2 (one-shot), collapsed
 //! into the minimal set of output-equivalence-class representatives per
 //! parameter combination (see `collapseGroups`). `--external-zlib` skips the
 //! integrated engine and spawns the historical per-version binaries instead.
@@ -37,6 +37,8 @@ const hints = @import("hints.zig");
 const profiles_mod = @import("profiles.zig");
 const ui = @import("ui.zig");
 const deflate = @import("deflate/deflate.zig");
+const legacy = @import("legacy/legacy.zig");
+const zopfli_native = @import("zopfli/native.zig");
 
 pub const Stage = enum {
     hinted,
@@ -74,6 +76,8 @@ pub const Candidate = struct {
 pub const Options = struct {
     binaries_dir: []const u8,
     paranoid: bool = false,
+    /// Search additional, uncommon Zopfli iteration counts in stage 2.
+    extended_zopfli: bool = false,
     /// Skip the integrated engine and spawn the per-version zlib binaries
     /// instead (the original tool's behavior; useful for cross-checking).
     external_zlib: bool = false,
@@ -102,6 +106,15 @@ pub fn zopfliIterations(uncompressed_len: usize) []const u32 {
     return &.{ 1, 2, 3, 5, 10, 15, 50, 100, 250, 500 };
 }
 
+/// A second-pass search of iteration counts between the fast defaults.
+/// Skipped in ordinary searches: these candidates can each cost far more
+/// CPU time than a complete zlib parameter matrix. Explicit opt-in only.
+pub fn zopfliExtraIterations(uncompressed_len: usize) []const u32 {
+    if (uncompressed_len > 16 * 1024 * 1024) return &.{};
+    if (uncompressed_len > 1024 * 1024) return &.{ 4, 6, 8, 12, 20, 25, 30, 40 };
+    return &.{ 4, 6, 7, 8, 9, 11, 12, 13, 14, 16, 20, 25, 30, 40, 60, 75, 125, 200, 300, 400 };
+}
+
 /// A zlib stream produced with level 0 (stored blocks) always occupies
 /// more than uncompressed_len + 11 bytes (2-byte header + 5-byte block
 /// header + 4-byte Adler-32 for a single block).
@@ -112,12 +125,15 @@ pub fn level0Possible(compressed_len: usize, uncompressed_len: usize) bool {
 /// Whether the profile takes part in the search in the given mode.
 ///
 /// Default mode: the integrated engine covers every stock zlib release
-/// 1.2.3-1.3.1, so the per-version binaries it supersedes are redundant.
+/// 1.2.3-1.3.2 (tested one-shot model), so those binaries are redundant.
 /// `--external-zlib` flips this: integrated engine off, all binaries on.
 pub fn profileWanted(p: profiles_mod.Profile, external_zlib: bool) bool {
     return switch (p.impl_type) {
         .integrated => !external_zlib,
+        .zopfli_native => !external_zlib,
+        .zopfli => external_zlib,
         .zlib_family => external_zlib or !p.covered_by_integrated,
+        .legacy_zlib => external_zlib,
         else => true,
     };
 }
@@ -128,7 +144,7 @@ pub fn countAvailable(io: std.Io, binaries_dir: []const u8, external_zlib: bool)
     var n: usize = 0;
     for (profiles_mod.profiles) |p| {
         if (!profileWanted(p, external_zlib)) continue;
-        if (p.impl_type == .integrated) {
+        if (p.impl_type == .integrated or p.impl_type == .zopfli_native) {
             n += 1;
             continue;
         }
@@ -152,6 +168,7 @@ const Ctx = struct {
     target_header: u16,
     level0_ok: bool,
     paranoid: bool,
+    extended_zopfli: bool = false,
     available: []const bool,
     exe_paths: []const []const u8,
     /// Temp file holding the uncompressed payload (fed to child stdin).
@@ -198,22 +215,67 @@ fn pack(c: Candidate) u64 {
 
 /// Header the candidate would emit; null when unpredictable.
 fn predictedHeader(p: profiles_mod.Profile, c: Candidate) ?u16 {
+    if (p.legacy_class != null) return null;
     return switch (p.impl_type) {
         // The integrated engine writes exactly the same container header as
         // any stock zlib-family implementation (see deflate.pump).
         .integrated, .zlib_family => hints.zlibContainerHeader(c.window_bits, c.level, c.strategy),
-        .zopfli => hints.zopfli_header,
+        .legacy_zlib => null,
+        .zopfli, .zopfli_native => profiles_mod.zopfliHeaderOf(p),
         .libdeflate => if (c.level >= 1) hints.libdeflateHeader(@intCast(c.level)) else null,
         .miniz => if (c.level >= 1) hints.minizHeader(@intCast(c.level)) else null,
         .advdef => null,
     };
 }
 
+test "legacy zlib has no unverified modern-header filter" {
+    const historical_profile = profiles_mod.profiles[15];
+    try std.testing.expectEqual(profiles_mod.ImplType.legacy_zlib, historical_profile.impl_type);
+    try std.testing.expect(predictedHeader(historical_profile, .{ .profile = 15, .level = 6 }) == null);
+    try std.testing.expect(!profileWanted(historical_profile, false));
+    try std.testing.expect(profileWanted(historical_profile, true));
+}
+
+test "historical class priority follows D, C, B, A" {
+    try std.testing.expectEqual(@as(u16, 0), effectivePrior(profiles_mod.profiles[0]));
+    for (1..5) |i| {
+        try std.testing.expectEqual(@as(u16, @intCast(i)), effectivePrior(profiles_mod.profiles[i]));
+    }
+    try std.testing.expect(effectivePrior(profiles_mod.profiles[5]) > 4);
+}
+
+test "in-process Zopfli replaces external CLI only in default search mode" {
+    var internal: ?profiles_mod.Profile = null;
+    var external: ?profiles_mod.Profile = null;
+    for (profiles_mod.profiles) |p| {
+        if (p.impl_type == .zopfli_native) internal = p;
+        if (p.impl_type == .zopfli) external = p;
+    }
+    try std.testing.expect(internal != null and external != null);
+    try std.testing.expect(profileWanted(internal.?, false));
+    try std.testing.expect(!profileWanted(external.?, false));
+    try std.testing.expect(!profileWanted(internal.?, true));
+    try std.testing.expect(profileWanted(external.?, true));
+}
+
 fn candidateLessThan(_: void, a: Candidate, b: Candidate) bool {
-    const pa = profiles_mod.profiles[a.profile].prior;
-    const pb = profiles_mod.profiles[b.profile].prior;
+    const pa = effectivePrior(profiles_mod.profiles[a.profile]);
+    const pb = effectivePrior(profiles_mod.profiles[b.profile]);
     if (pa != pb) return pa < pb;
     return a.score < b.score;
+}
+
+/// Modern streams dominate in practice; among early releases the newer
+/// generations D and C are likelier than B and A. External alternatives
+/// follow the in-process historical classes.
+fn effectivePrior(p: profiles_mod.Profile) u16 {
+    if (p.legacy_class) |class| return switch (class) {
+        .d => 1, .c => 2, .b => 3, .a => 4,
+        else => 5,
+    };
+    if (p.impl_type == .integrated) return 0;
+    if (p.impl_type == .zopfli_native) return 39;
+    return @as(u16, p.prior) + 10;
 }
 
 const StageBuilder = struct {
@@ -299,7 +361,7 @@ fn buildStage1(ctx: *Ctx, alloc: std.mem.Allocator) ![]Candidate {
     for (profiles_mod.profiles, 0..) |p, idx| {
         if (!ctx.available[idx]) continue;
         switch (p.impl_type) {
-            .integrated, .zlib_family => {
+            .integrated, .zlib_family, .legacy_zlib => {
                 const wb = ctx.header.window_bits;
                 var score: u32 = 0;
                 if (ctx.level0_ok and firstBlockIsStored(ctx.first_block)) {
@@ -323,9 +385,13 @@ fn buildStage1(ctx: *Ctx, alloc: std.mem.Allocator) ![]Candidate {
                     score += 1;
                 }
             },
-            .zopfli => {
-                // Zopfli's zlib container always declares FLEVEL=3 (0x78DA).
-                if (ctx.target_header != hints.zopfli_header) continue;
+            .zopfli, .zopfli_native => {
+                // Zopfli's zlib container header depends on the release:
+                // 1.0.2+ write FLEVEL=3 (0x78DA), 1.0.0/1.0.1 wrote FLEVEL=0
+                // (0x7801). The collapsed 1.0.2 profile is skipped: it is
+                // byte-identical to the 1.0.3 representative.
+                if (p.collapsed_into != null) continue;
+                if (ctx.target_header != profiles_mod.zopfliHeaderOf(p)) continue;
                 for (zopfliIterations(ctx.uncompressed.len), 0..) |it, i| {
                     try b.pushScored(.{
                         .profile = @intCast(idx),
@@ -380,19 +446,19 @@ fn buildStage2(ctx: *Ctx, alloc: std.mem.Allocator) ![]Candidate {
     for (profiles_mod.profiles, 0..) |p, idx| {
         if (!ctx.available[idx]) continue;
         switch (p.impl_type) {
-            .integrated, .zlib_family => {
+            .integrated, .zlib_family, .legacy_zlib => {
                 // With a canonical header, any parameter combination whose
                 // FLEVEL class differs would emit different FLG bytes.
                 if (!ctx.header.canonical()) continue;
                 const wb = ctx.header.window_bits;
-                const strat01_levels: []const i8 = switch (ctx.header.flevel) {
+                const strat01_levels: []const i8 = if (p.impl_type == .legacy_zlib or p.legacy_class != null) &.{ 6, 9, 1, 5, 4, 3, 2, 8, 7, 0 } else switch (ctx.header.flevel) {
                     0 => &.{ 1, 0 },
                     1 => &.{ 5, 4, 3, 2 },
                     2 => &.{6},
                     3 => &.{ 9, 8, 7 },
                 };
                 // Z_FIXED goes through deflate_slow and is level-dependent.
-                const strat4_levels: []const i8 = switch (ctx.header.flevel) {
+                const strat4_levels: []const i8 = if (p.impl_type == .legacy_zlib or p.legacy_class != null) &.{ 9, 6, 5, 4, 7, 3, 8, 2, 1 } else switch (ctx.header.flevel) {
                     0 => &.{ 9, 6, 5, 4, 7, 3, 8, 2, 1 },
                     else => &.{},
                 };
@@ -439,14 +505,24 @@ fn buildStage2(ctx: *Ctx, alloc: std.mem.Allocator) ![]Candidate {
                     }
                 }
             },
-            .zopfli => {
-                if (ctx.target_header != hints.zopfli_header) continue;
+            .zopfli, .zopfli_native => {
+                if (p.collapsed_into != null) continue;
+                if (ctx.target_header != profiles_mod.zopfliHeaderOf(p)) continue;
                 for (zopfliIterations(ctx.uncompressed.len)[6..], 0..) |it, i| {
                     try b.pushScored(.{
                         .profile = @intCast(idx),
                         .iterations = it,
                         .window_bits = 15,
                     }, @intCast(i));
+                }
+                if (ctx.extended_zopfli) {
+                    for (zopfliExtraIterations(ctx.uncompressed.len), 0..) |it, i| {
+                        try b.pushScored(.{
+                            .profile = @intCast(idx),
+                            .iterations = it,
+                            .window_bits = 15,
+                        }, @intCast(1000 + i));
+                    }
                 }
             },
             .libdeflate => {
@@ -497,7 +573,7 @@ fn buildStage3(ctx: *Ctx, alloc: std.mem.Allocator) ![]Candidate {
 
     for (profiles_mod.profiles, 0..) |p, idx| {
         if (!ctx.available[idx]) continue;
-        if (p.impl_type != .zlib_family and p.impl_type != .integrated) continue;
+        if (p.impl_type != .zlib_family and p.impl_type != .integrated and p.impl_type != .legacy_zlib) continue;
 
         var wbs: [10]u8 = undefined;
         var n_wbs: usize = 0;
@@ -587,7 +663,7 @@ fn runChild(ctx: *Ctx, argv: []const []const u8) ![]u8 {
 }
 
 // ---------------------------------------------------------------------------
-// Integrated engine (in-process zlib 1.2.3-1.3.1) execution
+// Integrated engine (in-process zlib 1.2.3-1.3.2) execution
 // ---------------------------------------------------------------------------
 
 /// One output-equivalence-class representative of the integrated engine.
@@ -614,22 +690,22 @@ fn collapseGroups(level: i32, strategy: u8) []const CollapseGroup {
                 .{ .variant = .z1_2_3, .range = "zlib 1.2.3" },
                 .{ .variant = .z1_2_4_to_1_2_8, .range = "zlib 1.2.4-1.2.8" },
                 .{ .variant = .z1_2_9, .range = "zlib 1.2.9" },
-                .{ .variant = .z1_2_10_plus, .range = "zlib 1.2.10-1.3.1" },
+                .{ .variant = .z1_2_10_plus, .range = "zlib 1.2.10-1.3.2" },
             },
             else => &[_]CollapseGroup{
                 .{ .variant = .z1_2_4_to_1_2_8, .range = "zlib 1.2.3-1.2.8" },
                 .{ .variant = .z1_2_9, .range = "zlib 1.2.9" },
-                .{ .variant = .z1_2_10_plus, .range = "zlib 1.2.10-1.3.1" },
+                .{ .variant = .z1_2_10_plus, .range = "zlib 1.2.10-1.3.2" },
             },
         };
     }
     return switch (strategy) {
         2, 3 => &[_]CollapseGroup{
-            .{ .variant = .z1_2_4_to_1_2_8, .range = "zlib 1.2.4-1.3.1" },
+            .{ .variant = .z1_2_4_to_1_2_8, .range = "zlib 1.2.4-1.3.2" },
             .{ .variant = .z1_2_3, .range = "zlib 1.2.3" },
         },
         else => &[_]CollapseGroup{
-            .{ .variant = .z1_2_4_to_1_2_8, .range = "zlib 1.2.3-1.3.1" },
+            .{ .variant = .z1_2_4_to_1_2_8, .range = "zlib 1.2.3-1.3.2" },
         },
     };
 }
@@ -638,6 +714,7 @@ fn collapseGroups(level: i32, strategy: u8) []const CollapseGroup {
 /// output-equivalence-class representative (1-4 attempts) and reports each.
 fn runIntegrated(ctx: *Ctx, c: Candidate, stage: Stage) ?Match {
     const p = profiles_mod.profiles[c.profile];
+    if (p.legacy_class) |class| return runLegacyIntegrated(ctx, c, stage, class);
     if (!ctx.ensureCompressor(ctx.uncompressed.len)) {
         report(ctx, p, c, false);
         return null;
@@ -676,6 +753,51 @@ fn runIntegrated(ctx: *Ctx, c: Candidate, stage: Stage) ?Match {
     return null;
 }
 
+/// Historical class search. Class D reuses the verified Zig deflate engine
+/// with its historical strategy capability mask. A-C still use their
+/// original statically linked C cores until their divergent paths are ported.
+fn runLegacyIntegrated(ctx: *Ctx, c: Candidate, stage: Stage, class: profiles_mod.ZlibClass) ?Match {
+    const p = profiles_mod.profiles[c.profile];
+    if (!ctx.ensureCompressor(ctx.uncompressed.len)) return null;
+
+    // Historical releases contain documented memory-unsafe edge paths.
+    // Do not invoke those paths inside the host process. They remain in the
+    // external audit mode until the queued sanitizer work is complete.
+    if (class == .d and c.strategy > 3) return null;
+    if (class != .d and c.level == 0 and c.strategy >= 2) return null;
+    if (class == .a and c.level == 0 and c.mem_level < 8) return null;
+
+    ctx.attempts += 1;
+    const matched = if (class == .d) blk: {
+        _ = ctx.compressor.?.compressExpect(.v1_2_2, @intCast(@max(c.level, 0)),
+            c.mem_level, c.strategy, c.window_bits, ctx.uncompressed,
+            ctx.output_buf.?, ctx.compressed) catch break :blk false;
+        break :blk true;
+    } else blk: {
+        const native_class: legacy.Class = switch (class) {
+            .a => .a, .b => .b, .c => .c, .d => unreachable,
+            else => return null,
+        };
+        const size = legacy.compress(native_class, ctx.uncompressed, ctx.output_buf.?,
+            c.level, c.mem_level, c.strategy, c.window_bits);
+        break :blk if (size) |n| std.mem.eql(u8, ctx.output_buf.?[0..n], ctx.compressed) else false;
+    };
+    var desc_buf: [160]u8 = undefined;
+    const desc = std.fmt.bufPrint(&desc_buf, "{s} {s} | lvl={d} mem={d} strat={s} wBits={d}", .{
+        ctx.stage.tag(), p.name, c.level, c.mem_level,
+        profiles_mod.STRATEGY_NAMES[@min(c.strategy, 4)], c.window_bits,
+    }) catch "attempt";
+    ctx.rep.attempt(desc, matched);
+    if (!matched) return null;
+    return .{
+        .profile = p, .stage = stage, .level = c.level,
+        .mem_level = c.mem_level, .strategy = c.strategy,
+        .window_bits = c.window_bits, .iterations = 0,
+        .attempts = ctx.attempts, .elapsed_ms = ctx.elapsed_ms,
+        .version_range = profiles_mod.classRange(class),
+    };
+}
+
 /// Compresses `ctx.uncompressed` in-process and compares the output against
 /// the original stream with early abort on the first divergent output chunk.
 fn compressIntegrated(ctx: *Ctx, variant: deflate.Variant, c: Candidate) bool {
@@ -708,7 +830,7 @@ fn refineRange(ctx: *Ctx, group: CollapseGroup, c: Candidate) []const u8 {
                 // Level 0: the legacy stored layout may coincide with the
                 // newer generations on this particular payload.
                 if (compressIntegrated(ctx, .z1_2_9, c)) {
-                    if (compressIntegrated(ctx, .z1_2_10_plus, c)) return "zlib 1.2.3-1.3.1";
+                    if (compressIntegrated(ctx, .z1_2_10_plus, c)) return "zlib 1.2.3-1.3.2";
                     return "zlib 1.2.3-1.2.9";
                 }
                 return group.range;
@@ -717,11 +839,11 @@ fn refineRange(ctx: *Ctx, group: CollapseGroup, c: Candidate) []const u8 {
             // the divergence needs the fill_window/block-flush timings to
             // drift apart.
             if (c.strategy != 2 and c.strategy != 3) return group.range;
-            if (compressIntegrated(ctx, .z1_2_3, c)) return "zlib 1.2.3-1.3.1";
+            if (compressIntegrated(ctx, .z1_2_3, c)) return "zlib 1.2.3-1.3.2";
             return group.range;
         },
         .z1_2_9 => {
-            if (compressIntegrated(ctx, .z1_2_10_plus, c)) return "zlib 1.2.9-1.3.1";
+            if (compressIntegrated(ctx, .z1_2_10_plus, c)) return "zlib 1.2.9-1.3.2";
             return group.range;
         },
         else => return group.range,
@@ -734,6 +856,24 @@ fn runCandidateInner(ctx: *Ctx, c: Candidate, stage: Stage) ?Match {
     if (p.impl_type == .integrated) {
         return runIntegrated(ctx, c, stage);
     }
+    if (p.impl_type == .zopfli_native) {
+        ctx.attempts += 1;
+        const output = zopfli_native.compress(ctx.gpa, ctx.uncompressed, c.iterations, p.release orelse .v1_0_3) catch {
+            report(ctx, p, c, false);
+            return null;
+        };
+        defer ctx.gpa.free(output);
+        const matched = std.mem.eql(u8, output, ctx.compressed);
+        report(ctx, p, c, matched);
+        if (!matched) return null;
+        return .{
+            .profile = p, .stage = stage, .level = c.level,
+            .mem_level = c.mem_level, .strategy = c.strategy,
+            .window_bits = c.window_bits, .iterations = c.iterations,
+            .attempts = ctx.attempts, .elapsed_ms = ctx.elapsed_ms,
+            .version_range = profiles_mod.zopfliGroupRange(p) orelse "",
+        };
+    }
 
     ctx.attempts += 1;
 
@@ -745,8 +885,8 @@ fn runCandidateInner(ctx: *Ctx, c: Candidate, stage: Stage) ?Match {
 
     switch (p.impl_type) {
         // .integrated never reaches this path (handled above).
-        .integrated => unreachable,
-        .zlib_family => {
+        .integrated, .zopfli_native => unreachable,
+        .zlib_family, .legacy_zlib => {
             argv_buf[1] = formatLevelArgs(&nb[0], c.level);
             argv_buf[2] = formatLevelArgs(&nb[1], c.mem_level);
             argv_buf[3] = formatLevelArgs(&nb[2], c.strategy);
@@ -817,6 +957,9 @@ fn runCandidateInner(ctx: *Ctx, c: Candidate, stage: Stage) ?Match {
             .iterations = c.iterations,
             .attempts = ctx.attempts,
             .elapsed_ms = ctx.elapsed_ms,
+            .version_range = if (p.impl_type == .legacy_zlib)
+                (if (profiles_mod.zlibClass(p)) |group| profiles_mod.classRange(group) else "")
+            else "",
         };
     }
     return null;
@@ -827,11 +970,11 @@ fn report(ctx: *Ctx, p: profiles_mod.Profile, c: Candidate, matched: bool) void 
     const tag = ctx.stage.tag();
     const desc = switch (p.impl_type) {
         .integrated => unreachable,
-        .zlib_family => std.fmt.bufPrint(&desc_buf, "{s} {s} | lvl={d} mem={d} strat={s} wBits={d}", .{
+        .zlib_family, .legacy_zlib => std.fmt.bufPrint(&desc_buf, "{s} {s} | lvl={d} mem={d} strat={s} wBits={d}", .{
             tag, p.name, c.level, c.mem_level,
             profiles_mod.STRATEGY_NAMES[@min(c.strategy, 4)], c.window_bits,
         }) catch "attempt",
-        .zopfli => std.fmt.bufPrint(&desc_buf, "{s} {s} | iterations={d}", .{
+        .zopfli, .zopfli_native => std.fmt.bufPrint(&desc_buf, "{s} {s} | iterations={d}", .{
             tag, p.name, c.iterations,
         }) catch "attempt",
         .libdeflate, .miniz => std.fmt.bufPrint(&desc_buf, "{s} {s} | level={d}", .{
@@ -862,7 +1005,7 @@ pub fn findExactMatch(
         exe_paths[idx] = path;
         available[idx] = switch (p.impl_type) {
             // The integrated engine needs no binary on disk.
-            .integrated => !opts.external_zlib,
+            .integrated, .zopfli_native => !opts.external_zlib,
             else => blk: {
                 if (!profileWanted(p, opts.external_zlib)) break :blk false;
                 std.Io.Dir.cwd().access(io, path, .{}) catch break :blk false;
@@ -897,6 +1040,7 @@ pub fn findExactMatch(
         .target_header = header.word(),
         .level0_ok = level0Possible(compressed.len, uncompressed.len),
         .paranoid = opts.paranoid,
+        .extended_zopfli = opts.extended_zopfli,
         .available = &available,
         .exe_paths = &exe_paths,
         .input_tmp_path = input_tmp_path,
@@ -994,6 +1138,18 @@ test "zopfliIterations shrinks for large inputs" {
     try testing.expectEqual(@as(usize, 10), zopfliIterations(1024).len);
     try testing.expectEqual(@as(usize, 7), zopfliIterations(2 * 1024 * 1024).len);
     try testing.expectEqual(@as(usize, 6), zopfliIterations(32 * 1024 * 1024).len);
+}
+
+test "supplementary Zopfli candidates never duplicate the standard schedule" {
+    for ([_]usize{ 0, 1024, 2 * 1024 * 1024, 20 * 1024 * 1024 }) |size| {
+        const primary = zopfliIterations(size);
+        const extra = zopfliExtraIterations(size);
+        for (extra, 0..) |iteration, i| {
+            try std.testing.expect(iteration > 0 and iteration <= 500);
+            for (primary) |existing| try std.testing.expect(iteration != existing);
+            for (extra[0..i]) |previous| try std.testing.expect(iteration != previous);
+        }
+    }
 }
 
 test "level0Possible rejects impossible stored streams" {
@@ -1220,13 +1376,13 @@ test "collapseGroups minimizes representatives per parameter combination" {
     {
         const groups = collapseGroups(6, 0);
         try testing.expectEqual(@as(usize, 1), groups.len);
-        try testing.expectEqualStrings("zlib 1.2.3-1.3.1", groups[0].range);
+        try testing.expectEqualStrings("zlib 1.2.3-1.3.2", groups[0].range);
     }
     // Z_HUFFMAN_ONLY / Z_RLE split off the 1.2.3 block states.
     {
         const groups = collapseGroups(6, 2);
         try testing.expectEqual(@as(usize, 2), groups.len);
-        try testing.expectEqualStrings("zlib 1.2.4-1.3.1", groups[0].range);
+        try testing.expectEqualStrings("zlib 1.2.4-1.3.2", groups[0].range);
         try testing.expectEqualStrings("zlib 1.2.3", groups[1].range);
     }
     // Level 0: three stored-block generations (1.2.3 and 1.2.4-1.2.8 share
@@ -1236,7 +1392,7 @@ test "collapseGroups minimizes representatives per parameter combination" {
         try testing.expectEqual(@as(usize, 3), groups.len);
         try testing.expectEqualStrings("zlib 1.2.3-1.2.8", groups[0].range);
         try testing.expectEqualStrings("zlib 1.2.9", groups[1].range);
-        try testing.expectEqualStrings("zlib 1.2.10-1.3.1", groups[2].range);
+        try testing.expectEqualStrings("zlib 1.2.10-1.3.2", groups[2].range);
     }
     // Level 0 with huff/rle: 1.2.3 stays stored, 1.2.4+ dispatch huff/rle.
     {
@@ -1275,7 +1431,7 @@ test "integrated engine reproduces its own default stream on the first attempt" 
     try testing.expect(m.profile.impl_type == .integrated);
     try testing.expectEqual(Stage.hinted, m.stage);
     try testing.expectEqual(@as(usize, 1), m.attempts);
-    try testing.expectEqualStrings("zlib 1.2.3-1.3.1", m.version_range);
+    try testing.expectEqualStrings("zlib 1.2.3-1.3.2", m.version_range);
 }
 
 test "integrated engine distinguishes zlib 1.2.3 on Z_HUFFMAN_ONLY" {

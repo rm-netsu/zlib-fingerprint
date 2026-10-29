@@ -144,13 +144,19 @@ pub fn zlibContainerHeader(window_bits_in: u8, level: i32, strategy: u32) u16 {
     return withFcheck(cmf, flg_base);
 }
 
-/// Zopfli's own zlib container writer (--zlib) always emits CMF=0x78 with
-/// FLEVEL=3 ("maximum compression"), i.e. the byte pair 0x78 0xDA —
-/// verified empirically against zopfli-1.0.3 and its vendored source
+/// Zopfli's own zlib container writer (--zlib) emits CMF=0x78 with FLEVEL=3
+/// ("maximum compression"), i.e. the byte pair 0x78 0xDA — verified
+/// empirically against zopfli-1.0.3 and its vendored source
 /// (vendor/zopfli-zopfli-1.0.3/src/zopfli/zlib_container.c).
 /// Note: `--deflate` produces RAW deflate without a zlib container, so it
 /// can never match a zlib stream.
 pub const zopfli_header: u16 = 0x78DA;
+
+/// Zopfli 1.0.0/1.0.1 wrote FLEVEL=0 ("fastest algorithm"): 0x78 0x01.
+/// Commit 05e3efc ("Set zlib level bits to 3 to indicate slowest
+/// compression") changed it for 1.0.2; verified against the official
+/// 1.0.0-1.0.3 release builds in the byte-level matrix.
+pub const zopfli_header_legacy: u16 = 0x7801;
 
 /// libdeflate writes a fixed CINFO=7 header and maps its 1..12 level onto
 /// FLEVEL as: 1 -> 0, 2-5 -> 1, 6-7 -> 2, 8-12 -> 3.

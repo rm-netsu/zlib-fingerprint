@@ -10,6 +10,27 @@ const hints = @import("hints.zig");
 const profiles_mod = @import("profiles.zig");
 const fingerprint = @import("fingerprint.zig");
 const ui = @import("ui.zig");
+comptime {
+    _ = @import("zopfli/hash.zig");
+    _ = @import("zopfli/cache.zig");
+    _ = @import("zopfli/lz77_store.zig");
+    _ = @import("zopfli/lz77_greedy.zig");
+    _ = @import("zopfli/lz77_match.zig");
+    _ = @import("zopfli/squeeze_path.zig");
+    _ = @import("zopfli/squeeze_stats.zig");
+    _ = @import("zopfli/squeeze_forward.zig");
+    _ = @import("zopfli/squeeze_optimal.zig");
+    _ = @import("zopfli/blocksplitter.zig");
+    _ = @import("zopfli/deflate_rle.zig");
+    _ = @import("zopfli/deflate_cost.zig");
+    _ = @import("zopfli/deflate_tree_encode.zig");
+    _ = @import("zopfli/deflate_lz77_output.zig");
+    _ = @import("zopfli/deflate_dynamic.zig");
+    _ = @import("zopfli/deflate_block_size.zig");
+    _ = @import("zopfli/deflate_driver.zig");
+    _ = @import("zopfli/tree.zig");
+    _ = @import("zopfli/katajainen.zig");
+}
 
 const usage_text =
     \\Usage: zlib-fingerprint [options] <compressed_file>
@@ -23,13 +44,14 @@ const usage_text =
     \\CINFO (windowBits), FLEVEL (level/strategy class), FDICT and the
     \\first DEFLATE block type.
     \\
-    \\By default stock zlib candidates are re-compressed in-process by the
-    \\integrated engine, which reproduces zlib 1.2.3-1.3.1 bit-exactly.
+    \\By default eight historical stock-zlib classes and Zopfli are compressed
+    \\in-process (Zopfli's optimizer is a fully native Zig port).
     \\
     \\Options:
     \\  -v, --verbose    print every candidate attempt
     \\      --no-color   disable ANSI colors
     \\      --paranoid   force the windowBits sweep even for canonical headers
+    \\      --extended-zopfli  also try uncommon iteration counts after defaults
     \\      --external-zlib  spawn per-version zlib binaries instead of the
     \\                       integrated engine
     \\      --binaries <dir>  directory with compressor binaries
@@ -44,6 +66,7 @@ const Options = struct {
     verbose: bool = false,
     no_color: bool = false,
     paranoid: bool = false,
+    extended_zopfli: bool = false,
     external_zlib: bool = false,
     binaries_dir: ?[]const u8 = null,
     file: ?[]const u8 = null,
@@ -66,6 +89,8 @@ fn parseArgs(init: std.process.Init, arena: std.mem.Allocator) !Options {
             opts.no_color = true;
         } else if (std.mem.eql(u8, a, "--paranoid")) {
             opts.paranoid = true;
+        } else if (std.mem.eql(u8, a, "--extended-zopfli")) {
+            opts.extended_zopfli = true;
         } else if (std.mem.eql(u8, a, "--external-zlib")) {
             opts.external_zlib = true;
         } else if (std.mem.eql(u8, a, "--binaries")) {
@@ -223,7 +248,7 @@ pub fn main(init: std.process.Init) !u8 {
             available_count, profiles_mod.profiles.len - 1,
         });
     } else {
-        rep.line("Mode: integrated zlib 1.2.3-1.3.1 engine + external alternatives ({d}/{d} available)", .{
+        rep.line("Mode: eight integrated stock zlib classes + external alternatives ({d}/{d} available)", .{
             available_count, profiles_mod.profiles.len,
         });
     }
@@ -236,7 +261,8 @@ pub fn main(init: std.process.Init) !u8 {
         uncompressed.items,
         header,
         first_block,
-        .{ .binaries_dir = binaries_dir, .paranoid = opts.paranoid, .external_zlib = opts.external_zlib },
+        .{ .binaries_dir = binaries_dir, .paranoid = opts.paranoid, .external_zlib = opts.external_zlib,
+           .extended_zopfli = opts.extended_zopfli },
         &rep,
     ) catch |err| blk: {
         rep.line("search error: {s}", .{@errorName(err)});
@@ -249,15 +275,29 @@ pub fn main(init: std.process.Init) !u8 {
         rep.line("- Implementation: {s}", .{m.profile.name});
         rep.line("- Stage         : {s}", .{m.stage.label()});
         switch (m.profile.impl_type) {
-            .integrated, .zlib_family => rep.line("- Parameters    : level={d}, memLevel={d}, strategy={s}, windowBits={d}", .{
+            .integrated, .zlib_family, .legacy_zlib => rep.line("- Parameters    : level={d}, memLevel={d}, strategy={s}, windowBits={d}", .{
                 m.level, m.mem_level, profiles_mod.STRATEGY_NAMES[@min(m.strategy, 4)], m.window_bits,
             }),
-            .zopfli => rep.line("- Parameters    : iterations={d}", .{m.iterations}),
+            .zopfli, .zopfli_native => rep.line("- Parameters    : iterations={d}", .{m.iterations}),
             .libdeflate, .miniz => rep.line("- Parameters    : level={d}", .{m.level}),
             .advdef => rep.line("- Parameters    : level=-{d}", .{m.level}),
         }
         if (m.version_range.len > 0) {
-            rep.line("- Versions      : {s} (integrated engine)", .{m.version_range});
+            rep.line("- Versions      : {s} ({s})", .{
+                m.version_range,
+                if (m.profile.impl_type == .integrated) "integrated engine" else "empirical one-shot class",
+            });
+        }
+        if (first_block) |block| {
+            if (block.btype == 0) {
+                // Stored (uncompressed) DEFLATE blocks follow RFC 1951's
+                // LEN/NLEN layout verbatim: stock zlib, Zopfli and other
+                // implementations emit byte-identical bytes for the same
+                // block layout. The reported producer is a bit-exact
+                // reproducer, not necessarily the original writer.
+                rep.line("- Note          : stream uses stored (uncompressed) DEFLATE blocks; "
+                    ++ "several implementations emit byte-identical output for this layout", .{});
+            }
         }
         rep.line("- Convergence   : {d} attempt{s}, {d} ms", .{
             m.attempts, if (m.attempts == 1) "" else "s", m.elapsed_ms,
@@ -276,5 +316,9 @@ test {
     _ = @import("fingerprint.zig");
     _ = @import("ui.zig");
     _ = @import("deflate/deflate.zig");
+    _ = @import("zopfli/native.zig");
+    _ = @import("zopfli/bitstream.zig");
+    _ = @import("zopfli/tree.zig");
+    _ = @import("zopfli/hash.zig");
     std.testing.refAllDecls(@This());
 }
