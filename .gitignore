@@ -24,7 +24,6 @@ outputs/zopfli-reference-tarballs/*.tar.gz
 
 # Generated benchmark fixtures (scripts/gen_fixtures.py)
 fixtures/
-fixtures-regression/
 
 # Rebuildable work dirs of the verification harnesses
 asan-work/
