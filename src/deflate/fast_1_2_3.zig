@@ -45,7 +45,9 @@ pub fn deflateFast(s: *DeflateState, flush: u32) BlockState {
         }
 
         // Find the longest match, discarding those <= prev_length.
-        if (hash_head != NIL and s.strstart - hash_head <= s.maxDist()) {
+        // (The distance check uses unsigned wrap-around like the C; at the
+        // accepted windowBits values it can never actually wrap.)
+        if (hash_head != NIL and s.strstart -% hash_head <= s.maxDist()) {
             if (s.strategy != Z_HUFFMAN_ONLY and s.strategy != Z_RLE) {
                 s.match_length = s.longestMatch(hash_head);
             } else if (s.strategy == Z_RLE and s.strstart - hash_head == 1) {

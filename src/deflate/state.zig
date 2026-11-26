@@ -145,6 +145,16 @@ pub const DeflateState = struct {
     /// Set once the adler32 trailer has been emitted (zlib negates `wrap`).
     trailer_written: bool = false,
 
+    /// Classes A-C (zlib 1.0.1-1.2.0) run the pre-1.2.x fill_window shape:
+    /// full-window slide copy, no WIN_INIT zero-fill, hash re-initialized
+    /// from `strstart` on every fill iteration (see fillWindowLegacy).
+    legacy_fill: bool = false,
+
+    /// Classes A-B (zlib 1.0.1-1.0.9) keep the unconditional early-block
+    /// stop heuristic in _tr_tally (zlib 1.1.0 moved it behind
+    /// #ifdef TRUNCATE_BLOCK and it is off by default ever since).
+    truncate_block: bool = false,
+
     /// zlib's status field (kept out of initParams for clarity).
     status: u32 = INIT_STATE,
 
@@ -152,12 +162,11 @@ pub const DeflateState = struct {
     adler: u32 = 1,
 
     /// Computes the derived parameter values from (level, memLevel, wBits).
-    /// Mirrors deflateInit2_'s clamping, including the historical
-    /// `windowBits == 8 -> 9` special case.
-    pub fn initParams(self: *DeflateState, level: u32, mem_level: u32, window_bits_in: u32) void {
-        var window_bits = window_bits_in;
-        if (window_bits == 8) window_bits = 9; // until 256-byte window bug fixed
-
+    /// Mirrors deflateInit2_'s clamping. The historical
+    /// `windowBits == 8 -> 9` remap is version-dependent (1.2.1+ remaps,
+    /// 1.0.x-1.2.0 either keep 8 or reject it) and is therefore decided by
+    /// the caller before this runs.
+    pub fn initParams(self: *DeflateState, level: u32, mem_level: u32, window_bits: u32) void {
         self.level = level;
         self.strategy = 0; // set by init()
         self.w_bits = window_bits;
@@ -349,7 +358,20 @@ pub const DeflateState = struct {
     }
 
     pub inline fn maxDist(self: *const DeflateState) u32 {
-        return self.w_size - MIN_LOOKAHEAD;
+        // C: MAX_DIST(s) = ((s)->w_size-MIN_LOOKAHEAD) in unsigned int
+        // arithmetic. For windowBits == 8 (w_size 256 < 262, accepted by
+        // zlib 1.0.x) this wraps to ~4 billion, which is exactly the
+        // historical behavior: the stored-block flush and the match-distance
+        // check become "never"/"always".
+        return self.w_size -% MIN_LOOKAHEAD;
+    }
+
+    /// The fill_window slide threshold. C evaluates `wsize+MAX_DIST(s)` in
+    /// unsigned int arithmetic, which for windowBits == 8 wraps around to
+    /// 2*w_size - MIN_LOOKAHEAD = 250: the window slides far earlier than
+    /// the (underflowed) standalone MAX_DIST would suggest.
+    pub inline fn slideLimit(self: *const DeflateState) u32 {
+        return self.w_size +% self.maxDist();
     }
 
     // -- window management --------------------------------------------------
@@ -363,12 +385,13 @@ pub const DeflateState = struct {
     /// overshoot the comparison loop), which is a harmless in-bounds-of-heap
     /// read in zlib but must be a zeroed guard region here.
     pub fn fillWindow(self: *DeflateState) void {
+        if (self.legacy_fill) return self.fillWindowLegacy();
         const wsize = self.w_size;
 
         while (true) {
             var more: u64 = self.window_size - self.lookahead - self.strstart;
 
-            if (self.strstart >= wsize + self.maxDist()) {
+            if (self.strstart >= self.slideLimit()) {
                 const copy_len: usize = @intCast(wsize - more);
                 std.mem.copyForwards(u8, self.window[0..copy_len], self.window[wsize .. wsize + copy_len]);
                 self.match_start -%= wsize;
@@ -419,6 +442,55 @@ pub const DeflateState = struct {
                 @memset(self.window[@intCast(self.high_water)..@intCast(self.high_water + init_len)], 0);
                 self.high_water += init_len;
             }
+        }
+    }
+
+    /// fill_window — the zlib 1.0.1 .. 1.2.0 shape (classes A-C), ported
+    /// faithfully from the vendor C sources:
+    ///   * the slide copies the FULL upper half of the window down (not just
+    ///     the occupied prefix) and does not zero-fill WIN_INIT bytes past
+    ///     the data end — match finders that overrun the lookahead therefore
+    ///     compare against stale-but-deterministic window bytes, exactly like
+    ///     the originals;
+    ///   * the hash value is re-initialized from `strstart` on every fill
+    ///     iteration (there is no `insert` bookkeeping);
+    ///   * the slide threshold `wsize+MAX_DIST(s)` is evaluated in wrapping
+    ///     u32 arithmetic, which matters for windowBits == 8 (limit 250).
+    pub fn fillWindowLegacy(self: *DeflateState) void {
+        const wsize = self.w_size;
+
+        while (true) {
+            var more: u32 = @intCast(self.window_size - @as(u64, self.lookahead) - self.strstart);
+
+            // If the window is almost full and there is insufficient
+            // lookahead, move the upper half to the lower one to make room
+            // in the upper half. (The two 16-bit `more` guards of the C
+            // original are no-ops on 32-bit int targets.)
+            if (self.strstart >= self.slideLimit()) {
+                std.mem.copyForwards(u8, self.window[0..wsize], self.window[wsize .. wsize + wsize]);
+                self.match_start -%= wsize;
+                self.strstart -%= wsize; // we now have strstart >= MAX_DIST
+                self.block_start -%= @as(i64, wsize);
+
+                // Slide the hash table (could be avoided with 32 bit
+                // values at the expense of memory usage).
+                self.slideHash();
+
+                more +%= wsize;
+            }
+            if (self.avail_in == 0) return;
+
+            const n = self.readBuf(self.window[self.strstart + self.lookahead .. self.strstart + self.lookahead + more]);
+            self.lookahead += n;
+
+            // Initialize the hash value now that we have some input.
+            if (self.lookahead >= MIN_MATCH) {
+                self.ins_h = self.window[self.strstart];
+                self.updateHash(self.window[self.strstart + 1]);
+            }
+
+            if (self.lookahead < MIN_LOOKAHEAD and self.avail_in != 0) continue;
+            break;
         }
     }
 

@@ -12,7 +12,6 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
-    addLegacySources(b, exe.root_module);
     addZopfliRuntime(exe.root_module);
     b.installArtifact(exe);
 
@@ -96,7 +95,6 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
-    addLegacySources(b, unit_tests.root_module);
     addZopfliRuntime(unit_tests.root_module);
     const run_unit_tests = b.addRunArtifact(unit_tests);
     const test_step = b.step("test", "Run unit tests");
@@ -112,9 +110,12 @@ fn addZopfliRuntime(module: *std.Build.Module) void {
     module.linkSystemLibrary("m", .{});
 }
 
-/// Compile four distinct historical zlib generations directly into the Zig
-/// executable. Exported and cross-TU names are prefixed per generation, so
-/// the original 1996–2004 deflate implementations never collide at link time.
+/// Compile the four historical zlib generations (classes A-D) into the
+/// `zlegacy` differential-verification tool ONLY. The fingerprint search
+/// itself runs every class through the native Zig engine (the C cores are
+/// retained as independent oracles; exported and cross-TU names are
+/// prefixed per generation so the original 1996–2004 deflate
+/// implementations never collide at link time).
 fn addLegacySources(b: *std.Build, module: *std.Build.Module) void {
     module.link_libc = true;
     const symbols = [_][]const u8{

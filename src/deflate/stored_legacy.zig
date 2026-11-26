@@ -36,18 +36,20 @@ pub fn deflateStoredLegacy(s: *DeflateState, flush: u32) BlockState {
         s.strstart += s.lookahead;
         s.lookahead = 0;
 
-        // Emit a stored block if pending_buf will be full.
-        const max_start: u64 = @as(u64, @intCast(s.block_start)) + max_block_size;
+        // Emit a stored block if pending_buf will be full. (ulg)block_start
+        // of a negative block_start (windowBits 8 slides) wraps exactly like
+        // the C cast, making max_start huge and the flush a no-op.
+        const max_start: u64 = @as(u64, @bitCast(s.block_start)) +% max_block_size;
         if (s.strstart == 0 or @as(u64, s.strstart) >= max_start) {
             // strstart == 0 is possible when wrapping around on 16-bit
             // machines.
-            s.lookahead = @intCast(@as(u64, s.strstart) - max_start);
-            s.strstart = @intCast(max_start);
+            s.lookahead = @truncate(@as(u64, s.strstart) -% max_start);
+            s.strstart = @truncate(max_start);
             if (s.flushBlock(false)) |bs| return bs;
         }
         // Flush if we may have to slide, otherwise block_start may become
         // negative and the data will be gone.
-        if (s.strstart -% @as(u32, @intCast(s.block_start)) >= s.maxDist()) {
+        if (s.strstart -% @as(u32, @truncate(@as(u64, @bitCast(s.block_start)))) >= s.maxDist()) {
             if (s.flushBlock(false)) |bs| return bs;
         }
     }

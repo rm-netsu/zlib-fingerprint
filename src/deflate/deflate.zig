@@ -22,13 +22,30 @@
 //! one-shot-success domain, with a restricted strategy set (no Z_FIXED).
 //! Its original C implementation is retained as an independent test oracle.
 //!
+//! The three pre-1.2.1 classes are native as well (verified against both
+//! the statically linked original C cores and the official release wrapper
+//! binaries):
+//!   * class A (1.0.1-1.0.5, `stored_1_0_x.zig`): 0xffff-clamped stored
+//!     blocks flushed at MAX_DIST, no pending-size cap;
+//!   * class B (1.0.6-1.0.9): pending-size-capped stored blocks plus the
+//!     still-active _tr_tally early-block-stop heuristic;
+//!   * class C (1.1.0-1.2.0): B with the heuristic disabled
+//!     (#ifdef TRUNCATE_BLOCK, off by default).
+//! All three share the pre-1.2.1 FLEVEL formula `(level-1)>>1` (unsigned,
+//! clamped to 3, strategy ignored — level 0 wraps to FLEVEL=3), the old
+//! fill_window shape (`state.fillWindowLegacy`) and the {0,1,2} strategy
+//! set; windowBits 8 is accepted natively by 1.0.x (level 0 only — at
+//! level >= 1 the 256-byte window leads the originals into out-of-bounds
+//! reads) and rejected by 1.1.0-1.2.0.
+//!
 //! Everything else (longest_match, fill_window, trees/Huffman coding,
 //! tables, adler32, stream framing) is shared code: it never changed the
 //! compressed bytes across the whole range, so single modules serve every
 //! version.
 //!
 //! The output-equivalence classes are:
-//!   { 1.2.3 }  { 1.2.4-1.2.8 }  { 1.2.9 }  { 1.2.10-1.3.1 }
+//!   { 1.0.1-1.0.5 }  { 1.0.6-1.0.9 }  { 1.1.0-1.2.0 }  { 1.2.3 }
+//!   { 1.2.4-1.2.8 }  { 1.2.9 }  { 1.2.10-1.3.2 }
 
 const std = @import("std");
 const st = @import("state.zig");
@@ -38,6 +55,7 @@ const tables = @import("tables.zig");
 const stored_legacy = @import("stored_legacy.zig");
 const stored_1_2_9 = @import("stored_1_2_9.zig");
 const stored_modern = @import("stored.zig");
+const stored_1_0_x = @import("stored_1_0_x.zig");
 const fast_modern = @import("fast.zig");
 const slow_modern = @import("slow.zig");
 const rle_mod = @import("rle.zig");
@@ -50,8 +68,12 @@ pub const DeflateState = st.DeflateState;
 pub const dbg_enabled = &trees.dbg_enabled;
 pub const windowGuardBytes = st.windowGuardBytes;
 
-/// All native Zig deflate versions; 1.2.2 represents empirical class D.
+/// All native Zig deflate versions; 1.0.5/1.0.9/1.2.0 represent the
+/// empirical legacy classes A/B/C, 1.2.2 represents class D.
 pub const Version = enum {
+    v1_0_5,
+    v1_0_9,
+    v1_2_0,
     v1_2_2,
     v1_2_3,
     v1_2_4,
@@ -71,6 +93,9 @@ pub const Version = enum {
     /// "1.2.3" style display name.
     pub fn name(self: Version) []const u8 {
         return switch (self) {
+            .v1_0_5 => "1.0.5",
+            .v1_0_9 => "1.0.9",
+            .v1_2_0 => "1.2.0",
             .v1_2_2 => "1.2.2",
             .v1_2_3 => "1.2.3",
             .v1_2_4 => "1.2.4",
@@ -95,13 +120,32 @@ pub const Version = enum {
 };
 
 pub const all_versions = [_]Version{
-    .v1_2_2,  .v1_2_3,  .v1_2_4,  .v1_2_5,  .v1_2_6,  .v1_2_7,  .v1_2_8, .v1_2_9,
-    .v1_2_10, .v1_2_11, .v1_2_12, .v1_2_13, .v1_3_0, .v1_3_1, .v1_3_2,
+    .v1_0_5,  .v1_0_9,  .v1_2_0,  .v1_2_2,  .v1_2_3,  .v1_2_4,  .v1_2_5,  .v1_2_6,  .v1_2_7,
+    .v1_2_8,  .v1_2_9,  .v1_2_10, .v1_2_11, .v1_2_12, .v1_2_13, .v1_3_0, .v1_3_1, .v1_3_2,
 };
 
-/// The four distinct compressed-output behaviors ("implementation
-/// variants"). Class D reuses the 1.2.3 algorithm with earlier API limits.
+/// The distinct compressed-output behaviors ("implementation variants").
+/// Class D reuses the 1.2.3 algorithm with earlier API limits; the legacy
+/// classes A-C differ from 1.2.3 exactly in:
+///   A (1.0.1-1.0.5): the 0xffff/MAX_DIST stored-block layout (no
+///      pending-size cap),
+///   B (1.0.6-1.0.9): A's successor with pending-size-capped stored blocks
+///      plus the still-active _tr_tally early-block-stop heuristic,
+///   C (1.1.0-1.2.0): B minus that heuristic (TRUNCATE_BLOCK off),
+/// and all three share the pre-1.2.1 FLEVEL formula, the old fill_window
+/// shape and the {0,1,2} strategy set.
 pub const Variant = enum {
+    /// zlib 1.0.1-1.0.5: 0xffff-clamped stored blocks flushed at MAX_DIST,
+    /// truncate heuristic active, legacy FLEVEL/fill_window, wbits 8-15,
+    /// strategies 0-2.
+    z1_0_5,
+    /// zlib 1.0.6-1.0.9: pending-size-capped stored blocks, truncate
+    /// heuristic active, legacy FLEVEL/fill_window, wbits 8-15, strategies
+    /// 0-2.
+    z1_0_9,
+    /// zlib 1.1.0-1.2.0: heuristic disabled (TRUNCATE_BLOCK), legacy
+    /// FLEVEL/fill_window, wbits 9-15, strategies 0-2.
+    z1_2_0,
     /// zlib 1.2.1-1.2.3: strategy dispatch inside deflate_fast/slow,
     /// longest_match_fast for Z_RLE, legacy deflate_stored.
     z1_2_3,
@@ -117,6 +161,9 @@ pub const Variant = enum {
 
     pub fn of(version: Version) Variant {
         return switch (version) {
+            .v1_0_5 => .z1_0_5,
+            .v1_0_9 => .z1_0_9,
+            .v1_2_0 => .z1_2_0,
             .v1_2_2, .v1_2_3 => .z1_2_3,
             .v1_2_4, .v1_2_5, .v1_2_6, .v1_2_7, .v1_2_8 => .z1_2_4_to_1_2_8,
             .v1_2_9 => .z1_2_9,
@@ -127,6 +174,9 @@ pub const Variant = enum {
     /// Human-readable version coverage of the variant.
     pub fn rangeName(self: Variant) []const u8 {
         return switch (self) {
+            .z1_0_5 => "zlib 1.0.1-1.0.5",
+            .z1_0_9 => "zlib 1.0.6-1.0.9",
+            .z1_2_0 => "zlib 1.1.0-1.2.0",
             .z1_2_3 => "zlib 1.2.3",
             .z1_2_4_to_1_2_8 => "zlib 1.2.4-1.2.8",
             .z1_2_9 => "zlib 1.2.9",
@@ -141,6 +191,9 @@ pub const Variant = enum {
     /// Representative version used to run this variant's dispatch.
     pub fn toVersion(self: Variant) Version {
         return switch (self) {
+            .z1_0_5 => .v1_0_5,
+            .z1_0_9 => .v1_0_9,
+            .z1_2_0 => .v1_2_0,
             .z1_2_3 => .v1_2_3,
             .z1_2_4_to_1_2_8 => .v1_2_8,
             .z1_2_9 => .v1_2_9,
@@ -149,11 +202,26 @@ pub const Variant = enum {
     }
 };
 
-pub const all_variants = [_]Variant{ .z1_2_3, .z1_2_4_to_1_2_8, .z1_2_9, .z1_2_10_plus };
+pub const all_variants = [_]Variant{ .z1_0_5, .z1_0_9, .z1_2_0, .z1_2_3, .z1_2_4_to_1_2_8, .z1_2_9, .z1_2_10_plus };
 
 /// Block-state dispatch, mirroring each generation's deflate() exactly.
 fn dispatch(s: *DeflateState, flush: u32, variant: Variant) st.BlockState {
     switch (variant) {
+        .z1_0_5, .z1_0_9, .z1_2_0 => {
+            // 1.0.x-1.2.0: pure configuration-table dispatch; strategies are
+            // handled inside deflate_fast/deflate_slow (Z_RLE/Z_FIXED do not
+            // exist). Level 0 stored layout differs per class.
+            if (s.level == 0) {
+                return switch (variant) {
+                    .z1_0_5 => stored_1_0_x.deflateStored10x(s, flush),
+                    else => stored_legacy.deflateStoredLegacy(s, flush),
+                };
+            }
+            return if (tables.configuration_table[s.level].is_fast)
+                fast_1_2_3.deflateFast(s, flush)
+            else
+                slow_1_2_3.deflateSlow(s, flush);
+        },
         .z1_2_3 => {
             // 1.2.3: pure configuration-table dispatch; strategies are
             // handled inside deflate_fast/deflate_slow.
@@ -213,14 +281,26 @@ pub fn pump(s: *DeflateState, flush: u32, variant: Variant) PumpResult {
     if (s.status == st.INIT_STATE) {
         var header: u32 = (@as(u32, tables.DEFLATED) + ((s.w_bits - 8) << 4)) << 8;
         var level_flags: u32 = undefined;
-        if (s.strategy >= tables.Z_HUFFMAN_ONLY or s.level < 2) {
-            level_flags = 0;
-        } else if (s.level < 6) {
-            level_flags = 1;
-        } else if (s.level == 6) {
-            level_flags = 2;
-        } else {
-            level_flags = 3;
+        switch (variant) {
+            // zlib 1.0.1-1.2.0: level_flags = (s->level-1) >> 1 in unsigned
+            // arithmetic, clamped to 3 — the strategy is NOT consulted and
+            // level 0 wraps to FLEVEL=3. Verified against the official
+            // 1.0.5/1.0.9/1.2.0 release binaries.
+            .z1_0_5, .z1_0_9, .z1_2_0 => {
+                const raw: u32 = (s.level -% 1) >> 1;
+                level_flags = if (raw > 3) 3 else raw;
+            },
+            else => {
+                if (s.strategy >= tables.Z_HUFFMAN_ONLY or s.level < 2) {
+                    level_flags = 0;
+                } else if (s.level < 6) {
+                    level_flags = 1;
+                } else if (s.level == 6) {
+                    level_flags = 2;
+                } else {
+                    level_flags = 3;
+                }
+            },
         }
         header |= level_flags << 6;
         if (s.strstart != 0) header |= 0x20; // PRESET_DICT (never in our flow)
@@ -354,6 +434,14 @@ pub const Compressor = struct {
     /// Python, deflateSync in Node, ...). For levels 1-9 the call pattern is
     /// byte-neutral; for level 0 (deflate_stored) the block layout depends
     /// on it, which is why the one-shot pattern is the modeled one.
+    ///
+    /// Per-release parameter limits (deflateInit2_ validation):
+    ///   * 1.0.1-1.2.0: strategies 0-2 only; windowBits 9-15 (1.1.0+ rejects
+    ///     8, the 1.0.x releases accept it — at level 0 only, because at
+    ///     level >= 1 the 256-byte window makes the originals follow hash
+    ///     chains with wrapped distances into out-of-bounds reads);
+    ///   * 1.2.1-1.2.2: adds Z_RLE, remaps windowBits 8 to 9;
+    ///   * 1.2.3+: full modern matrix.
     pub fn compress(
         self: *Compressor,
         version: Version,
@@ -389,17 +477,43 @@ pub const Compressor = struct {
         expect: ?[]const u8,
     ) PumpError!usize {
         if (level > 9 or mem_level < 1 or mem_level > 9 or
-            window_bits < 8 or window_bits > 15 or strategy > tables.Z_FIXED or
-            (version == .v1_2_2 and strategy > tables.Z_RLE))
+            window_bits < 8 or window_bits > 15 or strategy > tables.Z_FIXED)
         {
+            return error.InvalidParams;
+        }
+        const legacy_ab = version == .v1_0_5 or version == .v1_0_9;
+        if (legacy_ab or version == .v1_2_0) {
+            // Z_RLE/Z_FIXED do not exist before 1.2.1.
+            if (strategy > tables.Z_HUFFMAN_ONLY) return error.InvalidParams;
+        }
+        if (legacy_ab) {
+            // The 1.0.x releases keep the 256-byte window of windowBits 8.
+            // At level 0 that path is deterministic (and reproduced); at
+            // level >= 1 the match finder follows stale chain entries with
+            // wrapped distances and the original performs out-of-bounds
+            // reads — not reproducible, refuse it.
+            if (window_bits == 8 and level >= 1) return error.InvalidParams;
+        }
+        if (version == .v1_2_0) {
+            // 1.1.0-1.2.0 reject windowBits < 9 outright.
+            if (window_bits < 9) return error.InvalidParams;
+        }
+        if (version == .v1_2_2 and strategy > tables.Z_RLE) {
             return error.InvalidParams;
         }
 
         const s = &self.state;
         const variant = Variant.of(version);
 
+        // windowBits == 8 is remapped to 9 by zlib 1.2.1+ ("until 256-byte
+        // window bug fixed"); the 1.0.x releases keep it.
+        var eff_window_bits = window_bits;
+        if (eff_window_bits == 8 and !legacy_ab) eff_window_bits = 9;
+
         // Emulate a freshly-initialized zlib stream.
-        s.initParams(level, mem_level, window_bits);
+        s.initParams(level, mem_level, eff_window_bits);
+        s.legacy_fill = variant == .z1_0_5 or variant == .z1_0_9 or variant == .z1_2_0;
+        s.truncate_block = variant == .z1_0_5 or variant == .z1_0_9;
         @memset(self.window_buf[0 .. 2 * s.w_size + windowGuardBytes], 0);
         @memset(self.head_buf[0..s.hash_size], 0);
         @memset(self.prev_buf[0..s.w_size], 0);
@@ -521,4 +635,128 @@ test "hello world header and roundtrip size" {
     try std.testing.expectEqual(@as(u8, 0x78), out[0]);
     try std.testing.expectEqual(@as(u8, 0x9c), out[1]);
     try std.testing.expect(n > 8 and n < input.len);
+}
+
+// ---------------------------------------------------------------------------
+// Legacy classes A-C (zlib 1.0.1-1.2.0) — golden vectors captured from the
+// official 1.0.5 / 1.0.9 / 1.2.0 release wrapper binaries.
+// ---------------------------------------------------------------------------
+
+test "legacy FLEVEL formula: (level-1)>>1, strategy ignored, level 0 -> 3" {
+    var c = try Compressor.init(std.testing.allocator);
+    defer c.deinit();
+
+    var out: [Compressor.requiredOutputLen(16)]u8 = undefined;
+    const cases = [_]struct { v: Version, level: u32, strategy: u32, header: u16 }{
+        .{ .v = .v1_0_5, .level = 0, .strategy = 0, .header = 0x78DA },
+        .{ .v = .v1_0_9, .level = 0, .strategy = 0, .header = 0x78DA },
+        .{ .v = .v1_2_0, .level = 0, .strategy = 0, .header = 0x78DA },
+        .{ .v = .v1_0_5, .level = 1, .strategy = 0, .header = 0x7801 },
+        .{ .v = .v1_2_0, .level = 2, .strategy = 0, .header = 0x7801 },
+        .{ .v = .v1_0_9, .level = 5, .strategy = 0, .header = 0x789C },
+        .{ .v = .v1_2_0, .level = 6, .strategy = 0, .header = 0x789C },
+        .{ .v = .v1_0_5, .level = 9, .strategy = 0, .header = 0x78DA },
+        // Strategy is NOT consulted before 1.2.1 (modern zlib writes 0x7801
+        // for huffman-only at level 6).
+        .{ .v = .v1_0_5, .level = 6, .strategy = 2, .header = 0x789C },
+        .{ .v = .v1_0_9, .level = 6, .strategy = 2, .header = 0x789C },
+        .{ .v = .v1_2_0, .level = 6, .strategy = 2, .header = 0x789C },
+    };
+    for (cases) |case| {
+        const n = try c.compress(case.v, case.level, 8, case.strategy, 15, "test", &out);
+        try std.testing.expectEqual(@as(u8, @truncate(case.header >> 8)), out[0]);
+        try std.testing.expectEqual(@as(u8, @truncate(case.header & 0xff)), out[1]);
+        try std.testing.expect(n >= 8);
+    }
+}
+
+test "legacy class A stored layout: 65535-byte first block" {
+    var c = try Compressor.init(std.testing.allocator);
+    defer c.deinit();
+
+    const input = "A" ** 65535;
+    var out = try std.testing.allocator.alloc(u8, Compressor.requiredOutputLen(input.len));
+    defer std.testing.allocator.free(out);
+
+    // zlib 1.0.5 level 0 mem 8 wbits 15: 78 da 00 ff ff 00 00 41 41 ...
+    // (first stored block is the full 65535 bytes; 1.0.9+ emit 65531).
+    const n = try c.compress(.v1_0_5, 0, 8, 0, 15, input, out);
+    try std.testing.expectEqual(@as(usize, 65551), n);
+    try std.testing.expectEqualSlices(u8, &.{ 0x78, 0xda, 0x00, 0xff, 0xff, 0x00, 0x00, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41 }, out[0..16]);
+
+    // Classes B and C: 78 da 00 fb ff 04 00 41 41 ... (65531 + 4 split).
+    const n_b = try c.compress(.v1_0_9, 0, 8, 0, 15, input, out);
+    try std.testing.expectEqual(@as(usize, 65551), n_b);
+    try std.testing.expectEqualSlices(u8, &.{ 0x78, 0xda, 0x00, 0xfb, 0xff, 0x04, 0x00, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41 }, out[0..16]);
+    const n_c = try c.compress(.v1_2_0, 0, 8, 0, 15, input, out);
+    try std.testing.expectEqual(@as(usize, 65551), n_c);
+    try std.testing.expectEqualSlices(u8, &.{ 0x78, 0xda, 0x00, 0xfb, 0xff, 0x04, 0x00, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41 }, out[0..16]);
+}
+
+test "legacy classes: empty input golden vectors" {
+    var c = try Compressor.init(std.testing.allocator);
+    defer c.deinit();
+
+    var out: [Compressor.requiredOutputLen(16)]u8 = undefined;
+    // All three legacy classes at level 0: 78 da 01 00 00 ff ff 00 00 00 01
+    // (final empty stored block), at level 6: 78 9c 03 00 00 00 00 01.
+    for ([_]Version{ .v1_0_5, .v1_0_9, .v1_2_0 }) |v| {
+        const n0 = try c.compress(v, 0, 8, 0, 15, "", &out);
+        try std.testing.expectEqualSlices(u8, &.{ 0x78, 0xda, 0x01, 0x00, 0x00, 0xff, 0xff, 0x00, 0x00, 0x00, 0x01 }, out[0..n0]);
+        const n6 = try c.compress(v, 6, 8, 0, 15, "", &out);
+        try std.testing.expectEqualSlices(u8, &.{ 0x78, 0x9c, 0x03, 0x00, 0x00, 0x00, 0x00, 0x01 }, out[0..n6]);
+    }
+}
+
+test "legacy classes: level 6 stream matches the 1.0.5/1.0.9/1.2.0 binaries" {
+    var c = try Compressor.init(std.testing.allocator);
+    defer c.deinit();
+
+    var out: [Compressor.requiredOutputLen(128)]u8 = undefined;
+    const input = "hello hello hello hello hello zlib fingerprint";
+    const golden = [_]u8{
+        0x78, 0x9c, 0xcb, 0x48, 0xcd, 0xc9, 0xc9, 0x57, 0xc8, 0xc0, 0x41, 0x56, 0xe5, 0x64, 0x26, 0x29,
+        0xa4, 0x65, 0xe6, 0xa5, 0xa7, 0x16, 0x15, 0x14, 0x65, 0xe6, 0x95, 0x00, 0x00, 0x94, 0x24, 0x11,
+        0x7e,
+    };
+    for ([_]Version{ .v1_0_5, .v1_0_9, .v1_2_0 }) |v| {
+        const n = try c.compress(v, 6, 8, 0, 15, input, &out);
+        try std.testing.expectEqualSlices(u8, &golden, out[0..n]);
+    }
+}
+
+test "legacy windowBits 8: accepted by 1.0.x at level 0, rejected later" {
+    var c = try Compressor.init(std.testing.allocator);
+    defer c.deinit();
+
+    var out: [Compressor.requiredOutputLen(16)]u8 = undefined;
+    // zlib 1.0.5/1.0.9 level 0 windowBits 8 on "hello":
+    // 08 d7 01 05 00 fa ff 68 65 6c 6c 6f 06 2c 02 15
+    for ([_]Version{ .v1_0_5, .v1_0_9 }) |v| {
+        const n = try c.compress(v, 0, 8, 0, 8, "hello", &out);
+        try std.testing.expectEqualSlices(u8, &.{ 0x08, 0xd7, 0x01, 0x05, 0x00, 0xfa, 0xff, 0x68, 0x65, 0x6c, 0x6c, 0x6f, 0x06, 0x2c, 0x02, 0x15 }, out[0..n]);
+    }
+    // 1.1.0-1.2.0 reject windowBits < 9; level >= 1 at windowBits 8 is the
+    // documented out-of-bounds path of the originals and is refused.
+    try std.testing.expectError(error.InvalidParams, c.compress(.v1_2_0, 0, 8, 0, 8, "hello", &out));
+    try std.testing.expectError(error.InvalidParams, c.compress(.v1_0_5, 6, 8, 0, 8, "hello", &out));
+    // Z_RLE / Z_FIXED do not exist before 1.2.1.
+    try std.testing.expectError(error.InvalidParams, c.compress(.v1_2_0, 6, 8, 3, 15, "hello", &out));
+    try std.testing.expectError(error.InvalidParams, c.compress(.v1_0_9, 6, 8, 4, 15, "hello", &out));
+}
+
+test "legacy windowBits 8 level 0 long input: corrupt empty-block stream" {
+    var c = try Compressor.init(std.testing.allocator);
+    defer c.deinit();
+
+    // The 256-byte window makes MAX_DIST underflow, so no stored block is
+    // flushed mid-stream; block_start slides negative and the final flush
+    // emits an empty static block. zlib 1.0.5/1.0.9 really lose the data
+    // this way — the port reproduces the (corrupt) bytes exactly.
+    const input = "B" ** 500;
+    var out: [Compressor.requiredOutputLen(input.len)]u8 = undefined;
+    for ([_]Version{ .v1_0_5, .v1_0_9 }) |v| {
+        const n = try c.compress(v, 0, 8, 0, 8, input, &out);
+        try std.testing.expectEqualSlices(u8, &.{ 0x08, 0xd7, 0x03, 0x00, 0x2c, 0x5a, 0x80, 0xe9 }, out[0..n]);
+    }
 }

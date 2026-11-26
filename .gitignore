@@ -21,3 +21,6 @@ scripts/katajainen_ref
 # Delivery artifacts: built executables and downloaded reference tarballs
 outputs/bin-linux-x86_64/
 outputs/zopfli-reference-tarballs/*.tar.gz
+
+# Generated benchmark fixtures (scripts/gen_fixtures.py)
+fixtures/

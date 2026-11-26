@@ -37,7 +37,6 @@ const hints = @import("hints.zig");
 const profiles_mod = @import("profiles.zig");
 const ui = @import("ui.zig");
 const deflate = @import("deflate/deflate.zig");
-const legacy = @import("legacy/legacy.zig");
 const zopfli_native = @import("zopfli/native.zig");
 
 pub const Stage = enum {
@@ -215,7 +214,16 @@ fn pack(c: Candidate) u64 {
 
 /// Header the candidate would emit; null when unpredictable.
 fn predictedHeader(p: profiles_mod.Profile, c: Candidate) ?u16 {
-    if (p.legacy_class != null) return null;
+    if (p.legacy_class != null or p.impl_type == .legacy_zlib) {
+        // The header conventions of every historical class are now verified
+        // (source diff + official binaries; see EQUIVALENCE.md): classes A-C
+        // use the pre-1.2.1 FLEVEL formula, class D the modern one.
+        const class = profiles_mod.zlibClass(p) orelse return null;
+        return switch (class) {
+            .a, .b, .c => hints.zlibLegacyContainerHeader(c.window_bits, c.level),
+            else => hints.zlibContainerHeader(c.window_bits, c.level, c.strategy),
+        };
+    }
     return switch (p.impl_type) {
         // The integrated engine writes exactly the same container header as
         // any stock zlib-family implementation (see deflate.pump).
@@ -228,12 +236,20 @@ fn predictedHeader(p: profiles_mod.Profile, c: Candidate) ?u16 {
     };
 }
 
-test "legacy zlib has no unverified modern-header filter" {
-    const historical_profile = profiles_mod.profiles[15];
-    try std.testing.expectEqual(profiles_mod.ImplType.legacy_zlib, historical_profile.impl_type);
-    try std.testing.expect(predictedHeader(historical_profile, .{ .profile = 15, .level = 6 }) == null);
-    try std.testing.expect(!profileWanted(historical_profile, false));
-    try std.testing.expect(profileWanted(historical_profile, true));
+test "legacy classes now carry the verified pre-1.2.1 header filter" {
+    const class_c = profiles_mod.profiles[3];
+    try std.testing.expectEqual(profiles_mod.ImplType.integrated, class_c.impl_type);
+    try std.testing.expect(class_c.legacy_class != null);
+    // level 6 -> legacy FLEVEL 2 (78 9c) regardless of strategy.
+    try std.testing.expectEqual(@as(u16, 0x789C), predictedHeader(class_c, .{ .profile = 3, .level = 6 }).?);
+    // level 0 -> FLEVEL 3 (78 da).
+    try std.testing.expectEqual(@as(u16, 0x78DA), predictedHeader(class_c, .{ .profile = 3, .level = 0 }).?);
+    // External class-D binary: modern formula, strategy-aware.
+    const class_d_external = profiles_mod.profiles[15];
+    try std.testing.expectEqual(profiles_mod.ImplType.legacy_zlib, class_d_external.impl_type);
+    try std.testing.expectEqual(@as(u16, 0x7801), predictedHeader(class_d_external, .{ .profile = 15, .level = 6, .strategy = 2 }).?);
+    try std.testing.expect(!profileWanted(class_d_external, false));
+    try std.testing.expect(profileWanted(class_d_external, true));
 }
 
 test "historical class priority follows D, C, B, A" {
@@ -330,12 +346,22 @@ fn hintedZlibProbes(flevel: hints.Flevel, buf: []ZlibProbe) []ZlibProbe {
         },
         1 => blk: {
             const levels = [_]i8{ 5, 4, 3, 2 };
-            for (levels, 0..) |l, i| buf[i] = .{ .level = l, .strategy = 0 };
-            break :blk buf[0..levels.len];
+            var n: usize = 0;
+            for (levels) |l| {
+                buf[n] = .{ .level = l, .strategy = 0 };
+                n += 1;
+            }
+            // Z_FILTERED keeps the level-based FLEVEL; one twin probe so a
+            // modern filtered stream is attributed to the modern engine
+            // before any legacy class that reproduces the same bytes.
+            buf[n] = .{ .level = 5, .strategy = 1 };
+            n += 1;
+            break :blk buf[0..n];
         },
         2 => blk: {
             buf[0] = .{ .level = 6, .strategy = 0 };
-            break :blk buf[0..1];
+            buf[1] = .{ .level = 6, .strategy = 1 };
+            break :blk buf[0..2];
         },
         3 => blk: {
             const levels = [_]i8{ 9, 8, 7 };
@@ -343,6 +369,31 @@ fn hintedZlibProbes(flevel: hints.Flevel, buf: []ZlibProbe) []ZlibProbe {
             break :blk buf[0..levels.len];
         },
     };
+}
+
+/// Hinted probes for the pre-1.2.1 classes A-C, whose FLEVEL depends on
+/// the level only: (level-1)>>1 clamped to 3, so FLEVEL 0 <- levels 1-2,
+/// 1 <- 3-4, 2 <- 5-6, 3 <- 7-9 and level 0. Strategies 1 and 2 exist in
+/// these releases and change the payload but not the header, so one twin
+/// probe each is included; the modern profile carries the matching filtered
+/// twin, so a stream reproducible by both still attributes to modern first.
+fn legacyProbes(flevel: hints.Flevel, buf: []ZlibProbe) []ZlibProbe {
+    const levels: []const i8 = switch (flevel) {
+        0 => &.{ 1, 2 },
+        1 => &.{ 3, 4 },
+        2 => &.{ 5, 6 },
+        3 => &.{ 9, 8, 7 },
+    };
+    var n: usize = 0;
+    for (levels) |l| {
+        buf[n] = .{ .level = l, .strategy = 0 };
+        n += 1;
+    }
+    buf[n] = .{ .level = levels[0], .strategy = 1 };
+    n += 1;
+    buf[n] = .{ .level = levels[0], .strategy = 2 };
+    n += 1;
+    return buf[0..n];
 }
 
 fn firstBlockIsStored(fb: ?hints.BlockInfo) bool {
@@ -363,6 +414,10 @@ fn buildStage1(ctx: *Ctx, alloc: std.mem.Allocator) ![]Candidate {
         switch (p.impl_type) {
             .integrated, .zlib_family, .legacy_zlib => {
                 const wb = ctx.header.window_bits;
+                const is_legacy_abc = if (p.legacy_class) |cls|
+                    (cls == .a or cls == .b or cls == .c)
+                else
+                    false;
                 var score: u32 = 0;
                 if (ctx.level0_ok and firstBlockIsStored(ctx.first_block)) {
                     try b.pushScored(.{
@@ -374,7 +429,13 @@ fn buildStage1(ctx: *Ctx, alloc: std.mem.Allocator) ![]Candidate {
                     }, score);
                     score += 1;
                 }
-                for (hintedZlibProbes(ctx.header.flevel, &probe_buf)) |probe| {
+                // Classes A-C use the pre-1.2.1 level-only FLEVEL mapping;
+                // class D and every modern profile use the modern probes.
+                const probes = if (is_legacy_abc)
+                    legacyProbes(ctx.header.flevel, &probe_buf)
+                else
+                    hintedZlibProbes(ctx.header.flevel, &probe_buf);
+                for (probes) |probe| {
                     try b.pushScored(.{
                         .profile = @intCast(idx),
                         .level = probe.level,
@@ -451,16 +512,25 @@ fn buildStage2(ctx: *Ctx, alloc: std.mem.Allocator) ![]Candidate {
                 // FLEVEL class differs would emit different FLG bytes.
                 if (!ctx.header.canonical()) continue;
                 const wb = ctx.header.window_bits;
-                const strat01_levels: []const i8 = if (p.impl_type == .legacy_zlib or p.legacy_class != null) &.{ 6, 9, 1, 5, 4, 3, 2, 8, 7, 0 } else switch (ctx.header.flevel) {
+                const legacy_class = p.legacy_class orelse profiles_mod.zlibClass(p);
+                const is_legacy_abc = if (legacy_class) |cls|
+                    (cls == .a or cls == .b or cls == .c)
+                else
+                    false;
+                // Classes A-C map FLEVEL from the level only; class D and
+                // the modern profiles use the strategy-aware formula (their
+                // headers are now all predictable, so the hinted lists
+                // prune directly instead of pushing every level).
+                const strat01_levels: []const i8 = if (is_legacy_abc) switch (ctx.header.flevel) {
+                    0 => &.{ 1, 2 },
+                    1 => &.{ 3, 4 },
+                    2 => &.{ 5, 6 },
+                    3 => &.{ 9, 8, 7, 0 },
+                } else switch (ctx.header.flevel) {
                     0 => &.{ 1, 0 },
                     1 => &.{ 5, 4, 3, 2 },
                     2 => &.{6},
                     3 => &.{ 9, 8, 7 },
-                };
-                // Z_FIXED goes through deflate_slow and is level-dependent.
-                const strat4_levels: []const i8 = if (p.impl_type == .legacy_zlib or p.legacy_class != null) &.{ 9, 6, 5, 4, 7, 3, 8, 2, 1 } else switch (ctx.header.flevel) {
-                    0 => &.{ 9, 6, 5, 4, 7, 3, 8, 2, 1 },
-                    else => &.{},
                 };
                 for (strat01_levels) |level| {
                     if (level == 0 and !ctx.level0_ok) continue;
@@ -476,32 +546,62 @@ fn buildStage2(ctx: *Ctx, alloc: std.mem.Allocator) ![]Candidate {
                         }
                     }
                 }
-                // Z_HUFFMAN_ONLY (2) and Z_RLE (3) have no hash chains, so
-                // the level does not matter — but lit_bufsize (memLevel)
-                // shifts the block flush timing, so every memLevel is a
-                // distinct output. One level (9) sweep per strategy; the
-                // header-prediction filter drops these for FLEVEL != 0
-                // (strategies >= 2 always write FLEVEL=0).
-                for ([_]u8{ 2, 3 }, 0..) |strat, srank| {
-                    for (mems, 0..) |mem, mrank| {
-                        try b.pushScored(.{
-                            .profile = @intCast(idx),
-                            .level = 9,
-                            .mem_level = mem,
-                            .strategy = strat,
-                            .window_bits = wb,
-                        }, 1000 + srank * 100 + mrank);
+                if (is_legacy_abc) {
+                    // Strategies 0-2 exist in 1.0.x-1.2.0 and none of them
+                    // touches the header; strategy 2 skips the match search
+                    // inside deflate_fast/slow, so every hinted level is a
+                    // distinct candidate (unlike class D, where only level 9
+                    // suffices because the header forces FLEVEL=0). At level
+                    // 0 the strategy is ignored by deflate_stored, so only
+                    // the strategy-0 twin above is needed.
+                    for (strat01_levels) |level| {
+                        if (level == 0) continue;
+                        for (mems, 0..) |mem, mrank| {
+                            try b.pushScored(.{
+                                .profile = @intCast(idx),
+                                .level = level,
+                                .mem_level = mem,
+                                .strategy = 2,
+                                .window_bits = wb,
+                            }, 1000 + mrank);
+                        }
                     }
-                }
-                for (strat4_levels, 0..) |level, lrank| {
-                    for (mems, 0..) |mem, mrank| {
-                        try b.pushScored(.{
-                            .profile = @intCast(idx),
-                            .level = level,
-                            .mem_level = mem,
-                            .strategy = 4,
-                            .window_bits = wb,
-                        }, 1000 + 4 * 10 + lrank * 2 + mrank);
+                } else {
+                    // Z_HUFFMAN_ONLY (2) and Z_RLE (3) have no hash chains,
+                    // so the level does not matter — but lit_bufsize
+                    // (memLevel) shifts the block flush timing, so every
+                    // memLevel is a distinct output. One level (9) sweep per
+                    // strategy; the header-prediction filter drops these for
+                    // FLEVEL != 0 (strategies >= 2 always write FLEVEL=0).
+                    // Z_FIXED does not exist before 1.2.3, so class D
+                    // only gets strategies 2 and 3 here.
+                    for ([_]u8{ 2, 3 }, 0..) |strat, srank| {
+                        for (mems, 0..) |mem, mrank| {
+                            try b.pushScored(.{
+                                .profile = @intCast(idx),
+                                .level = 9,
+                                .mem_level = mem,
+                                .strategy = strat,
+                                .window_bits = wb,
+                            }, 1000 + srank * 100 + mrank);
+                        }
+                    }
+                    // Z_FIXED goes through deflate_slow and is
+                    // level-dependent (1.2.3+ only).
+                    const strat4_levels: []const i8 = if (legacy_class != null) &.{} else switch (ctx.header.flevel) {
+                        0 => &.{ 9, 6, 5, 4, 7, 3, 8, 2, 1 },
+                        else => &.{},
+                    };
+                    for (strat4_levels, 0..) |level, lrank| {
+                        for (mems, 0..) |mem, mrank| {
+                            try b.pushScored(.{
+                                .profile = @intCast(idx),
+                                .level = level,
+                                .mem_level = mem,
+                                .strategy = 4,
+                                .window_bits = wb,
+                            }, 1000 + 4 * 10 + lrank * 2 + mrank);
+                        }
                     }
                 }
             },
@@ -575,6 +675,12 @@ fn buildStage3(ctx: *Ctx, alloc: std.mem.Allocator) ![]Candidate {
         if (!ctx.available[idx]) continue;
         if (p.impl_type != .zlib_family and p.impl_type != .integrated and p.impl_type != .legacy_zlib) continue;
 
+        const legacy_class = p.legacy_class orelse profiles_mod.zlibClass(p);
+        const is_legacy_abc = if (legacy_class) |cls|
+            (cls == .a or cls == .b or cls == .c)
+        else
+            false;
+
         var wbs: [10]u8 = undefined;
         var n_wbs: usize = 0;
         if (!ctx.header.canonical()) {
@@ -589,6 +695,11 @@ fn buildStage3(ctx: *Ctx, alloc: std.mem.Allocator) ![]Candidate {
                 if (seen == wb) dup = true;
             }
             if (!dup) {
+                // windowBits 8: rejected outright by the 1.1.0-1.2.0
+                // releases. (The 1.0.x releases accept it; level 0 is probed,
+                // level >= 1 is the documented out-of-bounds path and is
+                // skipped at run time.)
+                if (wb == 8 and legacy_class == .c) continue;
                 wbs[n_wbs] = wb;
                 n_wbs += 1;
             }
@@ -599,7 +710,10 @@ fn buildStage3(ctx: *Ctx, alloc: std.mem.Allocator) ![]Candidate {
                 const level: i8 = @intCast(9 - li);
                 if (level == 0 and !ctx.level0_ok) continue;
                 for (mems, 0..) |mem, mrank| {
-                    for ([_]u8{ 0, 1, 4, 2, 3 }, 0..) |strat, srank| {
+                    // Strategy sets per generation: {0,1,2} for classes A-C,
+                    // {0,1,2,3} for class D, all five for 1.2.3+.
+                    const strats: []const u8 = if (is_legacy_abc) &.{ 0, 1, 2 } else if (legacy_class != null) &.{ 0, 1, 2, 3 } else &.{ 0, 1, 4, 2, 3 };
+                    for (strats, 0..) |strat, srank| {
                         try b.pushScored(.{
                             .profile = @intCast(idx),
                             .level = level,
@@ -753,34 +867,52 @@ fn runIntegrated(ctx: *Ctx, c: Candidate, stage: Stage) ?Match {
     return null;
 }
 
-/// Historical class search. Class D reuses the verified Zig deflate engine
-/// with its historical strategy capability mask. A-C still use their
-/// original statically linked C cores until their divergent paths are ported.
+/// Historical class search. Every class now runs the shared native Zig
+/// deflate engine with its class-specific variant and parameter limits
+/// (class D since the earlier migration, classes A-C since the native port;
+/// the original statically linked C cores remain available as differential
+/// oracles through the `zlegacy` dev tool).
 fn runLegacyIntegrated(ctx: *Ctx, c: Candidate, stage: Stage, class: profiles_mod.ZlibClass) ?Match {
     const p = profiles_mod.profiles[c.profile];
     if (!ctx.ensureCompressor(ctx.uncompressed.len)) return null;
 
-    // Historical releases contain documented memory-unsafe edge paths.
-    // Do not invoke those paths inside the host process. They remain in the
-    // external audit mode until the queued sanitizer work is complete.
+    // Historical releases contain documented memory-unsafe or
+    // non-deterministic edge paths. Do not probe them: the streams the
+    // originals would emit there either do not exist (crashes) or depend
+    // on out-of-bounds reads. They remain reachable with --external-zlib.
+    //
+    // * class A level 0 memLevel < 8: the 0xffff-clamped stored block
+    //   overruns the pending buffer and the real 1.0.1-1.0.5 abort;
+    // * level 0 with strategy >= 2: byte-identical to strategy 0 in these
+    //   releases (deflate_stored ignores the strategy), so the strategy-0
+    //   twin already covers the stream;
+    // * classes A/B windowBits 8 at level >= 1: the 256-byte window makes
+    //   MAX_DIST underflow and the match finder follows stale chain
+    //   entries with wrapped distances into out-of-bounds reads;
+    // * class C windowBits 8: rejected outright by 1.1.0-1.2.0;
+    // * class D strategy 4: Z_FIXED does not exist before 1.2.3.
     if (class == .d and c.strategy > 3) return null;
     if (class != .d and c.level == 0 and c.strategy >= 2) return null;
     if (class == .a and c.level == 0 and c.mem_level < 8) return null;
+    if (class == .a or class == .b) {
+        if (c.window_bits == 8 and c.level >= 1) return null;
+    }
+    if (class == .c and c.window_bits == 8) return null;
+
+    const version: deflate.Version = switch (class) {
+        .a => .v1_0_5,
+        .b => .v1_0_9,
+        .c => .v1_2_0,
+        .d => .v1_2_2,
+        else => return null,
+    };
 
     ctx.attempts += 1;
-    const matched = if (class == .d) blk: {
-        _ = ctx.compressor.?.compressExpect(.v1_2_2, @intCast(@max(c.level, 0)),
+    const matched = blk: {
+        _ = ctx.compressor.?.compressExpect(version, @intCast(@max(c.level, 0)),
             c.mem_level, c.strategy, c.window_bits, ctx.uncompressed,
             ctx.output_buf.?, ctx.compressed) catch break :blk false;
         break :blk true;
-    } else blk: {
-        const native_class: legacy.Class = switch (class) {
-            .a => .a, .b => .b, .c => .c, .d => unreachable,
-            else => return null,
-        };
-        const size = legacy.compress(native_class, ctx.uncompressed, ctx.output_buf.?,
-            c.level, c.mem_level, c.strategy, c.window_bits);
-        break :blk if (size) |n| std.mem.eql(u8, ctx.output_buf.?[0..n], ctx.compressed) else false;
     };
     var desc_buf: [160]u8 = undefined;
     const desc = std.fmt.bufPrint(&desc_buf, "{s} {s} | lvl={d} mem={d} strat={s} wBits={d}", .{
@@ -1191,11 +1323,14 @@ test "stage1 for a default-level header starts with the hinted candidate" {
     };
 
     const list = try buildStage1(&ctx, alloc);
-    try testing.expectEqual(@as(usize, 1), list.len);
+    // (6, default) first, then its Z_FILTERED twin (same FLEVEL class).
+    try testing.expectEqual(@as(usize, 2), list.len);
     try testing.expectEqual(@as(i8, 6), list[0].level);
     try testing.expectEqual(@as(u8, 8), list[0].mem_level);
     try testing.expectEqual(@as(u8, 0), list[0].strategy);
     try testing.expectEqual(@as(u8, 15), list[0].window_bits);
+    try testing.expectEqual(@as(i8, 6), list[1].level);
+    try testing.expectEqual(@as(u8, 1), list[1].strategy);
 }
 
 test "stage1 excludes implementations whose fixed header cannot match" {

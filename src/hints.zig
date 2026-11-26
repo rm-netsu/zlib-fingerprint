@@ -125,6 +125,31 @@ pub fn zlibFlevel(level: i32, strategy: u32) Flevel {
     return 3;
 }
 
+/// FLEVEL field the pre-1.2.1 zlib generations (1.0.1-1.2.0, empirical
+/// classes A-C) write. Mirrors their deflate.c:
+///
+///     uInt level_flags = (s->level-1) >> 1;
+///     if (level_flags > 3) level_flags = 3;
+///
+/// The strategy is NOT consulted, and level 0 computes (0u-1)>>1 = 0x7FFFFFFF
+/// in unsigned arithmetic, which clamps to FLEVEL=3. Verified empirically
+/// against the official 1.0.5/1.0.9/1.2.0 release binaries for every level:
+/// 0 -> 3, 1-2 -> 0, 3-4 -> 1, 5-6 -> 2, 7-9 -> 3.
+pub fn zlibLegacyFlevel(level: i32) Flevel {
+    const raw: u32 = (@as(u32, @bitCast(level)) -% 1) >> 1;
+    return if (raw > 3) 3 else @intCast(raw);
+}
+
+/// Predict the 16-bit container header a pre-1.2.1 zlib release (classes
+/// A-C) emits for the given parameters (no preset dictionary). Unlike
+/// 1.2.1+, windowBits == 8 is kept as-is by the 1.0.x releases (CINFO=0,
+/// 256-byte window); 1.1.0-1.2.0 reject it instead.
+pub fn zlibLegacyContainerHeader(window_bits: u8, level: i32) u16 {
+    const cmf: u8 = @intCast(8 | ((window_bits - 8) << 4));
+    const flg_base: u8 = @intCast(@as(u32, zlibLegacyFlevel(level)) << 6);
+    return withFcheck(cmf, flg_base);
+}
+
 /// Compute FCHECK so that (CMF * 256 + FLG) % 31 == 0.
 fn withFcheck(cmf: u8, flg_base: u8) u16 {
     const rem = (@as(u32, cmf) * 256 + @as(u32, flg_base)) % 31;
@@ -249,6 +274,31 @@ test "zlibContainerHeader reproduces well-known header bytes" {
     // windowBits 12 -> CINFO 4; windowBits 8 is upgraded to 9 internally.
     try testing.expectEqual(@as(u16, 0x4889), zlibContainerHeader(12, 6, 0));
     try testing.expectEqual(@as(u16, 0x1819), zlibContainerHeader(8, 1, 0));
+}
+
+test "zlibLegacyFlevel mirrors the pre-1.2.1 deflate.c mapping" {
+    try testing.expectEqual(@as(Flevel, 3), zlibLegacyFlevel(0)); // unsigned wrap
+    try testing.expectEqual(@as(Flevel, 0), zlibLegacyFlevel(1));
+    try testing.expectEqual(@as(Flevel, 0), zlibLegacyFlevel(2));
+    try testing.expectEqual(@as(Flevel, 1), zlibLegacyFlevel(3));
+    try testing.expectEqual(@as(Flevel, 1), zlibLegacyFlevel(4));
+    try testing.expectEqual(@as(Flevel, 2), zlibLegacyFlevel(5));
+    try testing.expectEqual(@as(Flevel, 2), zlibLegacyFlevel(6));
+    try testing.expectEqual(@as(Flevel, 3), zlibLegacyFlevel(7));
+    try testing.expectEqual(@as(Flevel, 3), zlibLegacyFlevel(9));
+}
+
+test "zlibLegacyContainerHeader matches the 1.0.5/1.0.9/1.2.0 binaries" {
+    // Captured from the official release wrapper binaries.
+    try testing.expectEqual(@as(u16, 0x78DA), zlibLegacyContainerHeader(15, 0));
+    try testing.expectEqual(@as(u16, 0x7801), zlibLegacyContainerHeader(15, 2));
+    try testing.expectEqual(@as(u16, 0x785E), zlibContainerHeader(15, 2, 0)); // modern differs
+    try testing.expectEqual(@as(u16, 0x789C), zlibLegacyContainerHeader(15, 5));
+    try testing.expectEqual(@as(u16, 0x789C), zlibLegacyContainerHeader(15, 6));
+    try testing.expectEqual(@as(u16, 0x78DA), zlibLegacyContainerHeader(15, 9));
+    // windowBits 8 stays 8 in the 1.0.x releases (CINFO=0).
+    try testing.expectEqual(@as(u16, 0x08D7), zlibLegacyContainerHeader(8, 0));
+    try testing.expectEqual(@as(u16, 0x0899), zlibLegacyContainerHeader(8, 6));
 }
 
 test "libdeflateHeader and minizHeader match empirical captures" {

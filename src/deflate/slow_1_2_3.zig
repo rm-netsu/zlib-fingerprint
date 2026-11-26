@@ -53,7 +53,7 @@ pub fn deflateSlow(s: *DeflateState, flush: u32) BlockState {
         s.match_length = MIN_MATCH - 1;
 
         if (hash_head != NIL and s.prev_length < s.max_lazy and
-            s.strstart - hash_head <= s.maxDist())
+            s.strstart -% hash_head <= s.maxDist())
         {
             if (s.strategy != Z_HUFFMAN_ONLY and s.strategy != Z_RLE) {
                 s.match_length = s.longestMatch(hash_head);

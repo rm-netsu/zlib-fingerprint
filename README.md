@@ -78,12 +78,14 @@ Duplicate candidates across stages are eliminated through a visited set.
 
 ## The integrated zlib engine
 
-By default, stock zlib candidates are **not** spawned as binaries. The
-modern 1.2.3–1.3.2 classes **and class D (1.2.1–1.2.2)** run through the
-shared native Zig engine in `src/deflate/`; the three earlier classes
-(A–C, 1.0.1–1.2.0) still use original historical C deflate sources compiled
-and linked directly into the program (`src/legacy/`). Class D's C source is
-retained as a differential reference. No old zlib DLL or subprocess is required.
+By default, stock zlib candidates are **not** spawned as binaries. Every
+historical class now runs through the shared native Zig engine in
+`src/deflate/`: classes E-H (1.2.3-1.3.2), class D (1.2.1-1.2.2, with its
+historical strategy limits) and — since the native port verified below —
+classes A-C (1.0.1-1.2.0) with their class-specific variants. The original
+C sources of all four legacy generations remain statically linked into
+the `zlegacy` dev tool as independent differential oracles, but the
+fingerprint executable itself compiles no algorithmic zlib C code.
 The behavior targets the tested one-shot `Z_FINISH` producer model.
 The modern Zig engine aborts mismatches at the first divergent output chunk.
 
@@ -151,6 +153,7 @@ After building the project and the original reference wrappers in `binaries/`:
 python3 scripts/audit_native_port.py
 python3 scripts/diff_native_class_d.py
 python3 scripts/diff_legacy_native.py
+python3 scripts/diff_native_legacy.py
 ```
 
 The expanded native audit compared **22,506** original/native runs across
@@ -158,12 +161,38 @@ all 15 releases from 1.2.2 through 1.3.2 without a mismatch. Its per-release
 results are in `native-port-audit.json`; limitations and test parameters
 are described in `EQUIVALENCE.md`.
 
-### Where the output actually changed (1.2.3 → 1.3.2)
+The legacy-class native port adds **43,619** further comparisons
+(`scripts/diff_native_legacy.py`): the native classes A-C against the
+statically linked original C cores, against every official class-member
+release binary (1.0.1 … 1.2.0), and a decompression round-trip of every
+produced stream — zero mismatches, with the 624 oracle-unsafe probes
+(class A level 0 with memLevel < 8) skipped and counted.
 
-Established by diffing every release and by a ~29 000-combination
-differential matrix over 13 compiled historical versions:
+### Where the output actually changed (1.0.1 → 1.3.2)
 
-1. **`deflate_stored` / level 0 — three generations**
+Established by diffing every release, by the ~29 000-combination
+differential matrix over 13 compiled historical versions, and by the
+43,619-comparison native-port verification for the pre-1.2.1 classes:
+
+0. **Pre-1.2.1 generations (classes A-C)** — three further boundaries:
+   the zlib header FLEVEL is `(level-1)>>1` clamped to 3, computed in
+   unsigned arithmetic (level 0 wraps to FLEVEL=3) and **without**
+   consulting the strategy;
+   * class A (1.0.1-1.0.5): `deflate_stored` (`stored_1_0_x.zig`) clamps
+     at 0xffff and flushes at MAX_DIST only — no pending-size cap, so the
+     first block is the full 65535 bytes at windowBits 15;
+   * class B (1.0.6-1.0.9): the pending-size-capped stored layout plus the
+     still-unconditional early-block-stop heuristic in `_tr_tally`
+     (`trees.zig`);
+   * class C (1.1.0-1.2.0): the heuristic moved behind
+     `#ifdef TRUNCATE_BLOCK` (off by default) — the first byte-level
+     B/C boundary;
+   * all three keep the pre-1.2.x `fill_window` shape
+     (`state.fillWindowLegacy`: full-window slide copy, no WIN_INIT,
+     hash re-initialized per fill), accept only strategies 0-2, and differ
+     in windowBits-8 handling (1.0.x keep the 256-byte window at level 0,
+     1.1.0+ reject it).
+1. **`deflate_stored` / level 0 — three further generations**
    (`stored_legacy.zig` → `stored_1_2_9.zig` → `stored.zig`);
    1.2.9 additionally emits no final block for empty input.
 2. **`Z_RLE` (strategy 3)** — 1.2.3 uses `deflate_fast`/`deflate_slow` with
@@ -182,7 +211,7 @@ across the entire range and lives in shared modules only.
 ### Output-equivalence classes
 
 ```text
-{ 1.2.3 }  { 1.2.4-1.2.8 }  { 1.2.9 }  { 1.2.10-1.3.2 }
+{ 1.0.1-1.0.5 }  { 1.0.6-1.0.9 }  { 1.1.0-1.2.0 }  { 1.2.3 }  { 1.2.4-1.2.8 }  { 1.2.9 }  { 1.2.10-1.3.2 }
 ```
 
 The search tries the minimal set of representatives per parameter
@@ -218,7 +247,7 @@ that path only in the stage-3 sweep, and this port models the idealized
 |---------|------|------------|
 | zlib (integrated), 1.2.3 – 1.3.2 | in-process | full `level memLevel strategy windowBits` matrix; 1.3.2 covered in tested one-shot model |
 | zlib class D, 1.2.1–1.2.2 | native Zig (shared 1.2.3 engine, historical strategy limits) | verified with original 1.2.2 oracle; all releases available with `--external-zlib` |
-| zlib classes A–C, 1.0.1–1.2.0 | in-process, statically linked historical C | one built-in representative per class; native Zig port pending |
+| zlib classes A–C, 1.0.1–1.2.0 | native Zig (class-specific variants: A stored layout, B `_tr_tally` heuristic, legacy FLEVEL/fill_window) | verified against the original C cores and all 16 official member binaries; C oracles kept in the `zlegacy` dev tool |
 | zlib 1.2.3 / 1.2.5 / 1.2.7 / 1.2.8 / 1.2.11 / 1.2.12 / 1.2.13 / 1.3 / 1.3.1 / 1.3.2 | external binaries | skipped in default mode (integrated); enabled with `--external-zlib` |
 | zlib-ng 2.2.1 (compat) | external binary | `level memLevel strategy`, windowBits fixed to 15 |
 | Zopfli 1.0.3 / 1.0.2 / 1.0.1 / 1.0.0 | in-process | release-specific behaviour (header, tree encoder, block selection); 1.0.2 collapsed into the 1.0.3 representative (byte-identical), reported as `zopfli 1.0.2-1.0.3` |
@@ -235,17 +264,26 @@ The earlier classes are A (1.0.1–1.0.5), B (1.0.6–1.0.9), C
 (1.1.0–1.2.0) and D (1.2.1–1.2.2). Their in-process priority is
 **D → C → B → A**, after modern stock zlib; external alternatives follow.
 `--external-zlib` instead audits individual historical binaries. For safety,
-level 0 with strategy 2/3 and class A level 0 with memLevel below 8 are
-excluded from the native C paths pending sanitizer checks; these unusual
-combinations can still be investigated with external binaries.
+the documented unsafe paths of the originals are not probed in-process:
+class A level 0 with memLevel below 8 (the real 1.0.x aborts after
+overrunning its pending buffer), level 0 with strategy 2/3 (byte-identical
+to the strategy-0 twin in these releases), windowBits 8 at level >= 1 for
+classes A/B (out-of-bounds reads in the originals), windowBits 8 for class
+C (rejected by 1.1.0-1.2.0) and strategy 4 for class D (Z_FIXED does not
+exist before 1.2.3). These combinations remain investigable with external
+binaries.
 
-The pre-1.2.3 releases are not classified as equivalent to modern zlib:
-their DEFLATE output may differ, and their header/strategy behavior has
-not been exhaustively characterized. Therefore their candidate headers are **not** rejected by
-the modern zlib FLEVEL prediction. In normal mode they use statically
-linked original sources. Exact per-release audit still uses optional
-binaries from `binaries/build-binaries.sh`. The pre-1.0 experimental series is
-not included, nor are unreleased source snapshots.
+The pre-1.2.1 header conventions are now fully characterized (see
+`hints.zlibLegacyContainerHeader`): FLEVEL = `(level-1)>>1` clamped to 3
+in unsigned arithmetic — level 0 wraps to FLEVEL=3 — with the strategy
+ignored. The fingerprint search therefore applies the same header
+prediction to classes A-C as to the modern engine. Streams whose bytes
+several classes reproduce exactly (e.g. uniform data at level 2, where
+A, B and C coincide) are reported with the highest-priority reproducer,
+consistent with the modern classes' collapse semantics. Exact per-release
+audit still uses optional binaries from `binaries/build-binaries.sh`. The
+pre-1.0 experimental series is not included, nor are unreleased source
+snapshots.
 
 The external zlib wrappers compress **one-shot** (read all input, single
 `Z_FINISH`), matching the integrated engine's producer model. Even so,
@@ -340,26 +378,35 @@ original TypeScript tool; "v1.1" is the metadata-driven engine with
 external zlib binaries; "v2.0" additionally collapses stock-zlib
 candidates into integrated in-process representatives:
 
-| Stream | FLEVEL | naive | v1.1 | v2.0 |
-|--------|--------|------:|-----:|-----:|
-| default level 6 (`0x789C`) | 2 | 104 | **1** | **1** |
-| level 9 (`0x78DA`) | 3 | 29 | **1** | **1** |
-| level 1 (`0x7801`) | 0 | 1 | **1** | **1** |
-| stored (level 0) | 0 | no match (12632 wasted) | 1 | **2** |
-| windowBits 12 (`0x4889`) | 2 | 2133 | **1** | **1** |
-| huffman-only strategy | 0 | 31 | 3 | **3** |
-| rle strategy | 0 | 32 | 4 | **5** |
-| fixed strategy | 0 | 108 | 76 | **54** |
-| filtered strategy | 2 | 105 | 15 | **7** |
-| memLevel 9 | 2 | 109 | 16 | **8** |
-| zlib-ng default | 2 | 325 | 11 | **3** |
-| libdeflate level 6 | 2 | 486 | 12 | **4** |
-| miniz level 10 | 3 | 502 | 42 | **18** |
-| Zopfli 15 iterations | 3 | impossible | 48 | **24** |
+| Stream | FLEVEL | naive | v1.1 | v2.0 | v2.1 |
+|--------|--------|------:|-----:|-----:|-----:|
+| default level 6 (`0x789C`) | 2 | 104 | **1** | **1** | **1** |
+| level 9 (`0x78DA`) | 3 | 29 | **1** | **1** | **1** |
+| level 1 (`0x7801`) | 0 | 1 | **1** | **1** | **1** |
+| stored (level 0) | 0 | no match (12632 wasted) | 1 | **2** | **2** |
+| windowBits 12 (`0x4889`) | 2 | 2133 | **1** | **1** | **1** |
+| huffman-only strategy | 0 | 31 | 3 | **3** | **3** |
+| rle strategy | 0 | 32 | 4 | **5** | **5** |
+| fixed strategy | 0 | 108 | 76 | **54** | **54** |
+| filtered strategy | 2 | 105 | 15 | 7 | **2** |
+| memLevel 9 | 2 | 109 | 16 | 8 | 17 |
+| zlib-ng default | 2 | 325 | 11 | **3** | **3** |
+| libdeflate level 6 | 2 | 486 | 12 | **4** | **4** |
+| miniz level 10 | 3 | 502 | 42 | **18** | **18** |
+| Zopfli 15 iterations | 3 | impossible | 48 | **24** | **24** |
+| legacy class A level 0 (`0x78DA`, 65535-byte blocks) | 3 | impossible | impossible | C oracle | **19** |
+| legacy class B truncate heuristic (level 3) | 1 | impossible | impossible | C oracle | **15** |
+| legacy class C huffman-only (level 6) | 2 | impossible | impossible | not found | **8** |
+| legacy class C windowBits 9 | 1 | impossible | impossible | not found | **10** |
 
-v2.0 keeps the metadata-guided order and removes process spawns from the
-zlib-family path entirely: a stock zlib stream is fingerprinted with a
-single in-process compression (~10 ms cold start included).
+v2.1 keeps the metadata-guided order and ports classes A-C into the native
+engine. The previous C-adapter search could not even represent
+legacy huffman-only streams at levels 2-8 (their FLEVEL is level-based,
+which the old candidate sets never probed); those streams now converge in
+stage 1. The added `Z_FILTERED` twin probe for FLEVEL 1/2 headers brings a
+modern filtered stream down to 2 attempts. A stock zlib stream is still
+fingerprinted with a single in-process compression (~10 ms cold start
+included).
 
 ## Project structure
 

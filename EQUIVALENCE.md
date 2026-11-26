@@ -52,6 +52,72 @@ The previous class for 1.2.10–1.3.1 extends **empirically** to 1.3.2:
 no difference across all 10,200 quick-matrix probes, and none in the
 1,344 shared-success calls of the buffer-size boundary experiment.
 
+## Native classes A-C port (2026-11-25)
+
+The three pre-1.2.1 classes were ported from their vendor C sources into
+the shared native Zig engine and verified before the fingerprint
+executable dropped its last algorithmic C code:
+
+| Comparison | Cases | Differences |
+|---|---:|---:|
+| native A/B/C vs statically linked original C cores (`zlegacy`) | 43,619 total | **0** |
+| native representative vs every official class-member binary (1.0.1 … 1.2.0, 16 releases) | included above | **0** |
+| decompression round-trip of every produced stream | included above | **0** |
+
+Tool: `scripts/diff_native_legacy.py` (fixtures: empty/repeat/periodic/
+random/sparse/heuristic-trigger/text inputs up to 262,144 bytes including
+all stored-block and window boundaries; levels 0-9, memLevel 1/8(/9),
+strategies 0-2, windowBits 9/15 plus the windowBits-8 level-0 paths;
+624 oracle-unsafe probes skipped and counted).
+
+### What actually differs per class (source-verified, oracle-confirmed)
+
+* **Header FLEVEL (all of A-C):** `level_flags = (s->level-1) >> 1`
+  clamped to 3, computed in unsigned arithmetic — level 0 wraps to
+  FLEVEL=3 — and the strategy is not consulted. Empirically confirmed
+  against the 1.0.5/1.0.9/1.2.0 binaries for every level and strategy:
+  levels 1-2 -> 0, 3-4 -> 1, 5-6 -> 2, 7-9 -> 3, level 0 -> 3.
+* **Class A (1.0.1-1.0.5):** `deflate_stored` clamps `strstart` at 0xffff
+  without flushing and emits blocks at `strstart - block_start >=
+  MAX_DIST` only; there is no pending-size cap, so at windowBits 15 the
+  first fill already fills the whole 64 KiB window and the first stored
+  block is 65,535 bytes (vs 65,531 from 1.0.6 on). At memLevel 8 the real
+  1.0.5 thereby overruns its 65,536-byte pending buffer by 4 bytes and
+  survives only thanks to allocator slack; at lower memLevels it aborts —
+  those probes stay excluded from the search.
+* **Class B (1.0.6-1.0.9):** the early-block-stop heuristic in `_tr_tally`
+  (`level > 2 && (last_lit & 0xfff) == 0 && matches < last_lit/2 &&
+  out_length < in_length/2 -> flush`) is still unconditional; 1.1.0 moved
+  it behind `#ifdef TRUNCATE_BLOCK` (off by default), which is the first
+  byte-level B/C boundary (witness: periodic-131072, level 3, mem 8,
+  strategy 0, window 9 -> 2020 vs 2001 bytes).
+* **Class C (1.1.0-1.2.0):** B minus the heuristic; windowBits 8 is
+  rejected (`windowBits < 9`); strategies are limited to 0-2.
+* **fill_window (A-C):** the pre-1.2.x shape — full-window slide copy, no
+  WIN_INIT zero-fill, hash re-initialized from `strstart` on every fill —
+  ported faithfully as `state.fillWindowLegacy`.
+* **windowBits 8 (A/B):** w_size 256 < MIN_LOOKAHEAD 262 makes the
+  standalone `MAX_DIST` macro wrap to ~4 billion while the fill_window
+  slide threshold `wsize+MAX_DIST(s)` wraps to 250. At level 0 the result
+  is a deterministic (data-losing, corrupt) stream — no stored block is
+  flushed, `block_start` slides negative and the final flush emits an
+  empty static-Huffman block — which the port reproduces byte-exactly.
+  At level >= 1 the match finder follows stale chain entries with wrapped
+  distances into out-of-bounds reads (`dist_code` indexing); those probes
+  are excluded from the search.
+
+### Search integration consequences
+
+* Header prediction now covers classes A-C (`hints.zlibLegacyContainerHeader`),
+  pruning candidates whose level cannot reproduce the observed FLEVEL.
+* Legacy strategy-2 candidates exist at *every* hinted level (the legacy
+  FLEVEL ignores the strategy); the pre-port search never generated them,
+  so legacy huffman-only streams at levels 2-8 were previously unfindexable.
+* Streams reproducible by several classes (uniform data at level 2 makes
+  A, B and C coincide; levels 7-9 make class C coincide with modern zlib)
+  are attributed to the highest-priority reproducer, matching the modern
+  classes' collapse semantics.
+
 ### Interpretation and limits
 
 - These are *observed equivalence classes*, **not mathematical proof** that
@@ -63,26 +129,25 @@ no difference across all 10,200 quick-matrix probes, and none in the
   macros, architectures or an output cap beyond the tested values.
 - The integrated Zig compressor covers 1.2.3–1.3.2 in the tested one-shot
   model. zlib 1.3.2 is supported based on empirical differential testing;
-  untested streaming behavior remains in `BACKLOG.md`. Legacy A–D cores
-  are now linked directly from their release-specific C sources in the
-  Zig executable (no runtime binary dependency). The four representative
-  C adapters matched their reference wrapper binaries in **9,088**
-  additional safe-case comparisons; **1,152** potentially unsafe edge cases
-  were deferred. The full per-release audit still uses external binaries.
+  untested streaming behavior remains in `BACKLOG.md`. All four legacy
+  classes A–D now run native Zig engines verified against their original C
+  sources and the official release binaries; the C cores remain linked
+  into the `zlegacy` dev tool as independent oracles. The full per-release
+  audit still uses external binaries.
 - This census begins with stable zlib 1.0.1. The earlier experimental
   0.x releases and nonstandard vendor forks are outside its scope.
 
 ## Native class-D migration (incremental)
 
-Class D (1.2.1–1.2.2) now uses the same Zig `fast_1_2_3`, `slow_1_2_3`,
+Class D (1.2.1–1.2.2) uses the same Zig `fast_1_2_3`, `slow_1_2_3`,
 `stored_legacy`, `state` and `trees` modules as 1.2.3, with `Z_FIXED`
 rejected at the parameter-validation boundary. Its separate C source
 remains available as an independent oracle in `zlegacy`.
 `scripts/diff_native_class_d.py` matched 2,592 common-success streams in
 3,168 safe probes against the original 1.2.2 wrapper. This validates the
 covered one-shot inputs and does **not** prove equivalence for streaming APIs.
-Classes A–C are still C-backed while their native algorithmic differences
-are being ported; the whole project is not yet pure Zig.
+Classes A–C are native since the 2026-11-25 port (see above); the
+production build no longer compiles any algorithmic zlib C source.
 
 ### Independent native-port re-audit (2026-10-27)
 
@@ -120,6 +185,7 @@ python3 scripts/equivalence_matrix.py --depth quick --out equivalence-results.js
 python3 scripts/probe_boundaries.py
 zig build -Doptimize=ReleaseFast
 python3 scripts/diff_legacy_native.py
+python3 scripts/diff_native_legacy.py   # native A-C vs C cores + member binaries
 ```
 
 `--depth full` also sweeps every level 0–9 and additional `memLevel=4`;

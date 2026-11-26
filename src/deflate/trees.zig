@@ -577,6 +577,7 @@ pub fn trTally(s: *DeflateState, dist: u32, lc: u32) bool {
     s.sym_buf[s.sym_next + 1] = @truncate(dist >> 8);
     s.sym_buf[s.sym_next + 2] = @truncate(lc & 0xff);
     s.sym_next += 3;
+    const last_lit: u32 = s.sym_next / 3;
 
     if (dist == 0) {
         // lc is the unmatched char.
@@ -588,6 +589,26 @@ pub fn trTally(s: *DeflateState, dist: u32, lc: u32) bool {
         const dist1 = dist - 1;
         s.dyn_ltree[@as(usize, tables.length_code[lc]) + LITERALS + 1].freq +%= 1;
         s.dyn_dtree[tables.dCode(dist1)].freq +%= 1;
+    }
+
+    // zlib 1.0.1-1.0.9 (classes A-B): the unconditional "try to guess if it
+    // is profitable to stop the current block here" heuristic. zlib 1.1.0
+    // moved it behind #ifdef TRUNCATE_BLOCK (off by default), which is the
+    // first byte-level boundary between classes B and C.
+    if (s.truncate_block) {
+        if (s.level > 2 and (last_lit & 0xfff) == 0) {
+            // Compute an upper bound for the compressed length.
+            var out_length: u64 = @as(u64, last_lit) * 8;
+            const in_length: u64 = @as(u64, s.strstart) -% @as(u64, @bitCast(s.block_start));
+            var dcode: usize = 0;
+            while (dcode < D_CODES) : (dcode += 1) {
+                out_length += @as(u64, s.dyn_dtree[dcode].freq) * (5 + @as(u64, tables.extra_dbits[dcode]));
+            }
+            out_length >>= 3;
+            if (s.matches < last_lit / 2 and out_length < in_length / 2) {
+                return true;
+            }
+        }
     }
 
     return s.sym_next == s.sym_end;
