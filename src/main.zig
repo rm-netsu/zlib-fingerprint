@@ -318,7 +318,7 @@ test {
     _ = @import("profiles.zig");
     _ = @import("fingerprint.zig");
     _ = @import("ui.zig");
-    _ = @import("deflate/deflate.zig");
+    _ = @import("zlib-replicant");
     _ = @import("zopfli/native.zig");
     _ = @import("zopfli/bitstream.zig");
     _ = @import("zopfli/tree.zig");

@@ -36,7 +36,7 @@ const std = @import("std");
 const hints = @import("hints.zig");
 const profiles_mod = @import("profiles.zig");
 const ui = @import("ui.zig");
-const deflate = @import("deflate/deflate.zig");
+const replicant = @import("zlib-replicant");
 const zopfli_native = @import("zopfli/native.zig");
 const miniz_tdefl = @import("miniz/tdefl.zig");
 const zlibng = @import("zlibng/deflate.zig");
@@ -192,7 +192,7 @@ const Ctx = struct {
     stage: Stage = .hinted,
     elapsed_ms: i64 = 0,
     /// Lazily-initialized integrated deflate engine (in-process candidates).
-    compressor: ?deflate.Compressor = null,
+    compressor: ?replicant.Compressor = null,
     /// Scratch buffer for one compressed candidate (sized once).
     output_buf: ?[]u8 = null,
     /// Lazily-initialized native miniz tdefl engine (in-process candidates).
@@ -203,10 +203,10 @@ const Ctx = struct {
 
     fn ensureCompressor(self: *Ctx, uncompressed_len: usize) bool {
         if (self.compressor == null) {
-            self.compressor = deflate.Compressor.init(self.gpa) catch return false;
+            self.compressor = replicant.Compressor.init(self.gpa) catch return false;
         }
         if (self.output_buf == null) {
-            const size = deflate.Compressor.requiredOutputLen(uncompressed_len);
+            const size = replicant.Compressor.requiredOutputLen(uncompressed_len);
             self.output_buf = self.gpa.alloc(u8, size) catch return false;
         }
         return true;
@@ -267,7 +267,8 @@ fn predictedHeader(p: profiles_mod.Profile, c: Candidate) ?u16 {
     }
     return switch (p.impl_type) {
         // The integrated engine writes exactly the same container header as
-        // any stock zlib-family implementation (see deflate.pump); so does
+        // any stock zlib-family implementation (see the zlib-replicant
+        // engine's pump); so does
         // zlib-ng's compat API (same FLEVEL formula, CINFO from w_bits).
         .integrated, .zlib_family, .zlibng_native => hints.zlibContainerHeader(c.window_bits, c.level, c.strategy),
         .legacy_zlib => null,
@@ -862,14 +863,15 @@ fn runChild(ctx: *Ctx, argv: []const []const u8) ![]u8 {
 
 /// One output-equivalence-class representative of the integrated engine.
 const CollapseGroup = struct {
-    variant: deflate.Variant,
+    variant: replicant.Variant,
     /// Version range this representative reproduces bit-exactly for the
     /// current parameter combination.
     range: []const u8,
 };
 
 /// Minimal per-combination set of representatives covering all 13 historical
-/// releases (see `deflate/deflate.zig` for the full equivalence analysis).
+/// releases (see the zlib-replicant package for the full equivalence
+/// analysis).
 ///
 /// At level >= 1 the only boundary that changes bytes is strategy 2/3
 /// (Z_HUFFMAN_ONLY/Z_RLE): zlib 1.2.3 dispatches inside deflate_fast/slow,
@@ -951,7 +953,7 @@ fn runIntegrated(ctx: *Ctx, c: Candidate, stage: Stage) ?Match {
 /// deflate engine with its class-specific variant and parameter limits
 /// (class D since the earlier migration, classes A-C since the native port;
 /// the original statically linked C cores remain available as differential
-/// oracles through the `zlegacy` dev tool).
+/// oracles through the `zlegacy` tool of the zlib-replicant package).
 fn runLegacyIntegrated(ctx: *Ctx, c: Candidate, stage: Stage, class: profiles_mod.ZlibClass) ?Match {
     const p = profiles_mod.profiles[c.profile];
     if (!ctx.ensureCompressor(ctx.uncompressed.len)) return null;
@@ -979,7 +981,7 @@ fn runLegacyIntegrated(ctx: *Ctx, c: Candidate, stage: Stage, class: profiles_mo
     }
     if (class == .c and c.window_bits == 8) return null;
 
-    const version: deflate.Version = switch (class) {
+    const version: replicant.Version = switch (class) {
         .a => .v1_0_5,
         .b => .v1_0_9,
         .c => .v1_2_0,
@@ -1012,7 +1014,7 @@ fn runLegacyIntegrated(ctx: *Ctx, c: Candidate, stage: Stage, class: profiles_mo
 
 /// Compresses `ctx.uncompressed` in-process and compares the output against
 /// the original stream with early abort on the first divergent output chunk.
-fn compressIntegrated(ctx: *Ctx, variant: deflate.Variant, c: Candidate) bool {
+fn compressIntegrated(ctx: *Ctx, variant: replicant.Variant, c: Candidate) bool {
     const compressor = &ctx.compressor.?;
     const out = ctx.output_buf.?;
     _ = compressor.compressExpect(
@@ -1669,9 +1671,9 @@ test "collapseGroups minimizes representatives per parameter combination" {
 test "integrated engine reproduces its own default stream on the first attempt" {
     const input = "The quick brown fox jumps over the lazy dog. " ** 24;
 
-    var c = try deflate.Compressor.init(testing.allocator);
+    var c = try replicant.Compressor.init(testing.allocator);
     defer c.deinit();
-    var reference: [deflate.Compressor.requiredOutputLen(input.len)]u8 = undefined;
+    var reference: [replicant.Compressor.requiredOutputLen(input.len)]u8 = undefined;
     const n = try c.compress(.v1_3_1, 6, 8, 0, 15, input, &reference);
     const compressed = reference[0..n];
 
@@ -1712,9 +1714,9 @@ test "integrated engine distinguishes zlib 1.2.3 on Z_HUFFMAN_ONLY" {
     }
     const input = &input_buf;
 
-    var c = try deflate.Compressor.init(testing.allocator);
+    var c = try replicant.Compressor.init(testing.allocator);
     defer c.deinit();
-    var reference: [deflate.Compressor.requiredOutputLen(input.len)]u8 = undefined;
+    var reference: [replicant.Compressor.requiredOutputLen(input.len)]u8 = undefined;
     const n = try c.compress(.v1_2_3, 1, 9, 2, 15, input, &reference);
     const compressed = reference[0..n];
 

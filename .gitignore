@@ -1,4 +1,5 @@
 zig-out/
+zig-pkg/
 .zig-cache/
 
 # Binaries in the binaries/ folder (keep the README, ignore binaries)
@@ -14,6 +15,8 @@ binaries/vendor/*/obj/
 binaries/vendor/*/zopfli
 
 *.idat
+
+__pycache__
 
 # Local reference binary built from scripts/katajainen_ref.c
 scripts/katajainen_ref

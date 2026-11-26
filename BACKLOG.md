@@ -8,8 +8,8 @@
 - [x] Прогнать все версии с `Z_SYNC_FLUSH`, `Z_FULL_FLUSH`, `Z_BLOCK` и
   `Z_PARTIAL_FLUSH` в разных точках входного потока; сохранить первые
   отличающиеся байты и исходные параметры.
-  (`scripts/stream_matrix.py stream`, 710 сценариев / 22 010 запусков /
-  31 релиз; группы `flush` и `every`; свидетели в `stream-matrix.json`)
+  (`zlib-replicant/scripts/stream_matrix.py stream`, 710 сценариев / 22 010 запусков /
+  31 релиз; группы `flush` и `every`; свидетели в `zlib-replicant/results/stream-matrix.json`)
 - [x] Проверить разбиение входа на порции 1, 2, 64, 512, 16 384 и 65 535 байт
   и выходные буферы 1–65 536 байт; особенно границу 1.2.9/1.2.10.
   (группа `chunk`: inchunk 1–65535 × outchunk 1–65536; выявлены
@@ -26,7 +26,7 @@
 - [x] Расширить дифференциальную матрицу до `--depth full`, увеличить данные
   до нескольких МиБ и добавить специально подобранные границы хеш-таблиц,
   `MIN_MATCH`, `MAX_MATCH` и pending buffer.
-  (`scripts/stream_matrix.py oneshot`: 8 403 случая / 260 493 запуска,
+  (`zlib-replicant/scripts/stream_matrix.py oneshot`: 8 403 случая / 260 493 запуска,
   уровни 0–9 × memLevel 1/4/8/9 × стратегии 0–4 × wbits 9/15, фикстуры
   matchb-* (повторы 2/3/4/257/258/259) и lit-* (точные границы lit_bufsize
   128/16384), плюс 2 МиБ mixed; на 2 МиБ найдено расщепление 1.1.0)
@@ -50,7 +50,7 @@
 - [x] Дифференцировать неопределённое поведение/падения старых версий
   (`Z_HUFFMAN_ONLY`, `Z_RLE`, малые буферы) от легального результата;
   запускать нестабильные кейсы под ASan/UBSan.
-  (`scripts/asan_unstable.py` + `asan-results.json`: подтверждены
+  (`zlib-replicant/scripts/asan_unstable.py` + `zlib-replicant/results/asan-results.json`: подтверждены
   heap-buffer-overflow у A (level 0, memLevel<8), SEGV у A/B (wbits 8,
   level>=1), повреждение кучи у 1.0.5 (deflateParams 9→0, memLevel 1);
   педагогичный UBSan memcpy(NULL,0) у 1.2.11; оверфлоу 1.2.4–1.2.8
@@ -69,7 +69,7 @@
   по исходникам)
 - [ ] Повторить тесты на x86-64 и ARM64, с разными опциями сборки,
   включая `FASTEST`, `UNALIGNED_OK`, `-O0/-O2/-O3`.
-  (частично: `scripts/build_options_check.py` на x86-64 — `-O0`/`-O3`/
+  (частично: `zlib-replicant/scripts/build_options_check.py` на x86-64 — `-O0`/`-O3`/
   `UNALIGNED_OK`/`DEBUG` побайтово идентичны дефолту (180 случаев),
   `FASTEST` легитимно меняет вывод; ARM64-запуски не выполнялись —
   нужна соответствующая среда)
@@ -82,7 +82,7 @@
   эвристика TRUNCATE_BLOCK, легаси-формула FLEVEL, старая fill_window,
   отказ от windowBits 8. Сверка: 43 619 сравнений с C-оракулом и всеми 16
   официальными бинарниками класса — 0 расхождений
-  (`scripts/diff_native_legacy.py`, 2026-11-25).
+  (`zlib-replicant/scripts/diff_native_legacy.py`, 2026-11-25).
 - [x] Нативно перенести различающиеся пути ядер B и A (1.0.x): раннее
   отсечение блока в _tr_tally (класс B), разбиение stored-блоков 0xffff/
   MAX_DIST без ограничения pending-буфера (класс A), windowBits 8
@@ -93,19 +93,21 @@
   исторического C при level=0, необычных стратегиях и малом memLevel.
   (недетерминированные/UB-пути задокументированы и исключены из поиска;
   оригиналы прогнаны под ASan/UBSan, поведение зафиксировано в
-  `asan-results.json`)
+  `zlib-replicant/results/asan-results.json`)
 - [x] Построить автоматическую регрессию: каждое найденное отличие
   сохраняется минимальным fixture и проверяется CI.
-  (`fixtures-regression/` — 16 золотых свидетелей с SHA-256-манифестом;
-  `scripts/regression_check.py` проверяет золотые потоки, официальные
+  (`zlib-replicant/fixtures-regression/` — 16+4 золотых свидетеля с SHA-256-манифестом;
+  `zlib-replicant/scripts/regression_check.py` проверяет золотые потоки, официальные
    бинарники, нативные движки и сквозной поиск;
-   `.github/workflows/ci.yml` запускает тесты, регрессию и обе матрицы.
+   `zlib-replicant/.github/workflows/ci.yml` (перенесён в пакет вместе с движком:
+   тесты движка, регрессию и обе дифференциальные матрицы) +
+   `.github/workflows/ci.yml` репозитория (поиск и интеграция).
    Регрессия уже окупилась: поймала пропуск Z_RLE на уровнях 1–8 в
    поиске — исправлено в `src/fingerprint.zig`)
 
 Текущие воспроизводимые результаты: [EQUIVALENCE.md](EQUIVALENCE.md),
-`equivalence-results.json`, `boundary-results.json`, `stream-matrix.json`,
-`oneshot-ext-results.json`, `asan-results.json`, `build-options-results.json`,
+`zlib-replicant/results/equivalence-results.json`, `zlib-replicant/results/boundary-results.json`, `zlib-replicant/results/stream-matrix.json`,
+`zlib-replicant/results/oneshot-ext-results.json`, `zlib-replicant/results/asan-results.json`, `zlib-replicant/results/build-options-results.json`,
 `zopfli-matrix-ext.json`.
 
 ## Нативные порты zlib-ng и miniz (2026-11-27)

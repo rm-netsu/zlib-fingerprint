@@ -27,7 +27,7 @@ search representative and reports the group range `zopfli 1.0.2-1.0.3`.
 
 | Component | Implementation | Status |
 |---|---|---|
-| RFC 1950 header, FLEVEL, checksum and trailer | `container.zig`, shared Zig `deflate/state.zig::adler32` | Native and active |
+| RFC 1950 header, FLEVEL, checksum and trailer | `container.zig`, shared adler32 from the zlib-replicant engine | Native and active |
 | Original Zopfli bit-output primitives | `bitstream.zig`, `deflate_tree_encode.zig` | Native and active |
 | Rolling hash / match-chain primitives | `hash.zig` | Native, active through the original C ABI |
 | Longest-match result caching and sublength encoding | `cache.zig` | Native, active through the original C ABI |

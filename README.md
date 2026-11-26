@@ -80,13 +80,20 @@ Duplicate candidates across stages are eliminated through a visited set.
 ## The integrated zlib engine
 
 By default, stock zlib candidates are **not** spawned as binaries. Every
-historical class now runs through the shared native Zig engine in
-`src/deflate/`: classes E-H (1.2.3-1.3.2), class D (1.2.1-1.2.2, with its
-historical strategy limits) and — since the native port verified below —
-classes A-C (1.0.1-1.2.0) with their class-specific variants. The original
+historical class now runs through the shared native Zig engine — the
+separate `zlib-replicant` package (a path dependency in `build.zig.zon`,
+imported as the module name `"zlib-replicant"`): classes E-H (1.2.3-1.3.2),
+class D (1.2.1-1.2.2, with its historical strategy limits) and — since the
+native port verified below — classes A-C (1.0.1-1.2.0) with their
+class-specific variants. The original
 C sources of all four legacy generations remain statically linked into
-the `zlegacy` dev tool as independent differential oracles, but the
-fingerprint executable itself compiles no algorithmic zlib C code.
+the `zlegacy` oracle tool (also built by the package) as independent
+differential oracles, but the fingerprint executable itself compiles no
+algorithmic zlib C code.
+The package additionally carries the engine's whole differential-testing
+infrastructure: the `zcompress`/`zlegacy` harness tools, the
+reference-binary builder for all 31 stock-zlib releases, the
+differential suites and the golden regression corpus.
 The behavior targets the tested one-shot `Z_FINISH` producer model.
 The modern Zig engine aborts mismatches at the first divergent output chunk.
 
@@ -148,26 +155,30 @@ cost for the usual case.
 
 ### Verifying the native port
 
-After building the project and the original reference wrappers in `binaries/`:
+The differential suites of the zlib engine itself live in the
+`zlib-replicant` package now (they were extracted together with the
+engine and its oracle tooling). After building the project and the
+original reference wrappers (`binaries/build-binaries.sh`):
 
 ```sh
-python3 scripts/audit_native_port.py
-python3 scripts/diff_native_class_d.py
-python3 scripts/diff_legacy_native.py
-python3 scripts/diff_native_legacy.py
+python3 zlib-replicant/scripts/audit_native_port.py
+python3 zlib-replicant/scripts/diff_native_class_d.py
+python3 zlib-replicant/scripts/diff_legacy_native.py
+python3 zlib-replicant/scripts/diff_native_legacy.py
 ```
 
 The expanded native audit compared **22,506** original/native runs across
 all 15 releases from 1.2.2 through 1.3.2 without a mismatch. Its per-release
-results are in `native-port-audit.json`; limitations and test parameters
-are described in `EQUIVALENCE.md`.
+results are in `zlib-replicant/results/native-port-audit.json`; limitations
+and test parameters are described in `EQUIVALENCE.md`.
 
 The legacy-class native port adds **43,619** further comparisons
-(`scripts/diff_native_legacy.py`): the native classes A-C against the
-statically linked original C cores, against every official class-member
-release binary (1.0.1 … 1.2.0), and a decompression round-trip of every
-produced stream — zero mismatches, with the 624 oracle-unsafe probes
-(class A level 0 with memLevel < 8) skipped and counted.
+(`zlib-replicant/scripts/diff_native_legacy.py`): the native classes A-C
+against the statically linked original C cores, against every official
+class-member release binary (1.0.1 … 1.2.0), and a decompression
+round-trip of every produced stream — zero mismatches, with the 624
+oracle-unsafe probes (class A level 0 with memLevel < 8) skipped and
+counted.
 
 ### zlib-ng 2.2.1 (compat) — fully native Zig port
 
@@ -369,15 +380,21 @@ zig build -Doptimize=ReleaseFast -Dtarget=x86_64-macos
 zig build test          # unit tests
 ```
 
-Artifacts land in `zig-out/bin/`: `zlib-fingerprint` (the CLI) and
-`zcompress` (dev tool: compress stdin exactly like a specific historical
-zlib release — the differential-verification harness for the integrated
-engine).
+Artifacts land in `zig-out/bin/`: `zlib-fingerprint` (the CLI), `zcompress`
+(dev tool: compress stdin exactly like a specific historical zlib release
+— the differential-verification harness for the integrated engine) and
+`zlegacy` (the original C-core oracles for classes A-D), the latter two
+built and exposed by the `zlib-replicant` package and installed here by
+the root build.
 
 The optional external compressor binaries are built once by:
 
 ```sh
 cd binaries && ./build-binaries.sh
+# or only the official stock-zlib reference wrappers (1.0.1–1.4):
+ZLIB_ONLY=1 ./build-binaries.sh
+# or directly through the package's builder:
+bash zlib-replicant/binaries/build-references.sh
 ```
 
 ## Usage
@@ -481,7 +498,6 @@ src/
 ├── hints.zig          # header parsing, FLEVEL mapping, header prediction
 ├── profiles.zig       # implementation table (priorities, integrated coverage)
 ├── ui.zig             # SGR colors + live progress
-├── deflate/           # integrated historical zlib engine
 ├── zlibng/            # native zlib-ng 2.2.1 (compat) engine
 │   ├── deflate.zig    # full port: stored/quick/fast/medium/slow/rle/huff,
 │   │                  # longest_match (+slow variant), integer & rolling
@@ -490,21 +506,64 @@ src/
 └── miniz/
     ├── tdefl.zig      # native miniz 3.1.2 tdefl port (scalar released build)
     └── tables.zig     # len/dist tables extracted from the 3.1.2 sources
-    ├── deflate.zig    # version registry (1.2.2–1.3.2 / 4 byte-output classes), dispatch,
-    │                  # one-shot compressor with early-abort comparison
-    ├── state.zig      # shared deflate_state, bit output, window, hash,
-    │                  # longest_match, longest_match_fast (1.2.3-only paths)
-    ├── tables.zig     # configuration_table, static trees, length/distance codes
-    ├── trees.zig      # shared trees.c: block flush, tree building, codes
-    ├── stored_legacy.zig  # deflate_stored, zlib 1.2.3-1.2.8  ┐ version-specific
-    ├── stored_1_2_9.zig   # deflate_stored, zlib 1.2.9         ├─ generations
-    ├── stored.zig         # deflate_stored, zlib 1.2.10-1.3.2  ┘
-    ├── fast.zig / slow.zig          # deflate_fast/slow, zlib 1.2.4+
-    ├── fast_1_2_3.zig / slow_1_2_3.zig  # 1.2.1–1.2.3 variants (shared paths)
-    ├── rle.zig        # deflate_rle,   zlib 1.2.4+
-    └── huff.zig       # deflate_huff,  zlib 1.2.4+
+zlib-replicant/        # the integrated historical zlib engine (classes A-H)
+│                       # + its complete differential-testing infrastructure
+│                       # + its own CI (.github/workflows/ci.yml)
+│                       # — the dependency form is lightweight: zon .paths
+│                       # ships src/ only; the infra and the CI stay
+│                       # development-side (DEV.md documents them)
+├── .github/workflows/ci.yml  # the engine CI, moved into the package:
+│                       # unit tests, golden-corpus regression incl.
+│                       # official wrappers, both differential matrices
+├── build.zig          # module registration; zcompress/zlegacy tools +
+│                       # C-core-oracle tests only when the dev files are
+│                       # present (skipped in the dependency subset)
+├── build.zig.zon      # package metadata (path dependency of the root);
+│                       # .paths = the engine-only dependency subset
+├── DEV.md             # development guide: harness, oracles, suites, CI,
+├── src/
+│   ├── deflate.zig   # version registry (1.2.2–1.3.2 / 4 byte-output classes), dispatch,
+│   │                  # one-shot compressor with early-abort comparison
+│   ├── state.zig     # shared deflate_state, bit output, window, hash,
+│   │                  # longest_match, longest_match_fast (1.2.3-only paths)
+│   ├── tables.zig    # configuration_table, static trees, length/distance codes
+│   ├── trees.zig      # shared trees.c: block flush, tree building, codes
+│   ├── stored_legacy.zig  # deflate_stored, zlib 1.2.3-1.2.8  ┐ version-specific
+│   ├── stored_1_2_9.zig   # deflate_stored, zlib 1.2.9         ├─ generations
+│   ├── stored.zig        # deflate_stored, zlib 1.2.10-1.3.2  ┘
+│   ├── fast.zig / slow.zig          # deflate_fast/slow, zlib 1.2.4+
+│   ├── fast_1_2_3.zig / slow_1_2_3.zig  # 1.2.1–1.2.3 variants (shared paths)
+│   ├── rle.zig       # deflate_rle,   zlib 1.2.4+
+│   └── huff.zig      # deflate_huff,  zlib 1.2.4+
+├── tools/
+│   ├── zcompress.zig # dev tool: stdin -> stdout like zlib-<version> wrappers
+│   └── zlegacy.zig   # dev tool: the original C-core oracles (classes A-D)
+├── legacy/            # original C sources of classes A-D (symbol-prefixed,
+│                       # bridge.c, legacy.zig adapter) — differential oracles
+├── binaries/          # reference-binary builder for the official stock-zlib
+│   │                  # wrappers (zlib-<ver> / zstream-<ver>, 1.0.1–1.4)
+│   └── build-references.sh + wrapper sources
+├── scripts/           # the engine's differential suites (refenv.py resolves
+│   │                  # tools/wrappers in both layouts)
+│   ├── diff_engine.py         # integrated engine vs 9 real zlib builds
+│   ├── diff_native_legacy.py  # classes A-C vs C cores + member binaries
+│   ├── diff_legacy_native.py  # C cores vs genuine release binaries
+│   ├── diff_native_class_d.py # class D vs the original 1.2.2 oracle
+│   ├── audit_native_port.py   # version-wide one-shot audit (22,506 runs)
+│   ├── equivalence_matrix.py  # empirical byte-stream equivalence census
+│   ├── stream_matrix.py       # streaming-API + full-depth one-shot
+│   │                          # differential (710 scenarios + 8,403 cases,
+│   │                          # 31 releases)
+│   ├── probe_boundaries.py    # class-boundary witnesses across avail_out
+│   ├── build_options_check.py  # -O0/-O3/UNALIGNED_OK/DEBUG/FASTEST equivalence
+│   ├── asan_unstable.py       # sanitizer validation of the excluded UB paths
+│   ├── analyze_splits.py      # stream-matrix follow-up analysis
+│   ├── gen_regression_fixtures.py  # self-validating golden-stream manifest
+│   └── regression_check.py    # end-to-end CI regression over the goldens
+├── fixtures-regression/  # 20 golden witnesses + manifest (see the package CI)
+└── results/           # recorded experiment reports (equivalence census,
+                        # stream matrix, boundaries, build options, ASan, audit)
 tools/
-├── zcompress.zig      # dev tool: stdin -> stdout like zlib-<version> wrappers
 ├── zzlibng.zig        # dev tool: stdin -> stdout like zlib-ng-2.2.1 (differential
 │                      # harness for the native zlib-ng port)
 └── zminiz.zig         # dev tool: stdin -> stdout like miniz-3.1.2 (differential
@@ -512,20 +571,13 @@ tools/
 scripts/
 ├── gen_fixtures.py    # benchmark fixture generator
 ├── gen_edge.py        # FDICT / bad-FCHECK edge-case streams
-├── diff_engine.py     # integrated engine vs 9 real zlib builds (1080 checks)
 ├── diff_native_miniz.py   # native tdefl vs the miniz-3.1.2 wrapper (340 runs)
 ├── diff_native_zlibng.py  # native zlib-ng vs the official 2.2.1 binary (110+ runs;
 │                          # --full adds the 450-case level x memLevel x strategy matrix)
 ├── bench_new.py       # convergence benchmark over fixtures/
 ├── bench_old.py       # naive-order comparison benchmark
-├── stream_matrix.py   # streaming-API + full-depth one-shot differential
-│                      # (710 scenarios + 8,403 cases, 31 releases)
-├── asan_unstable.py   # sanitizer validation of the excluded UB paths
-├── build_options_check.py  # -O0/-O3/UNALIGNED_OK/DEBUG/FASTEST equivalence
 ├── zopfli_matrix_ext.py    # Zopfli: new iterations + 24 MiB corpus
-├── gen_regression_fixtures.py  # self-validating golden-stream manifest
-└── regression_check.py     # end-to-end CI regression over the goldens
-fixtures-regression/    # 16 golden witnesses + manifest (see ci.yml)
+└── ...                 # (Zopfli / search-specific suites; see the scripts dir)
 ```
 
 ## License

@@ -3,7 +3,7 @@
 //! The FLEVEL header bits differ per release: 1.0.0/1.0.1 write 0
 //! (`78 01`), 1.0.2+ write 3 (`78 da`).
 const std = @import("std");
-const shared = @import("../deflate/state.zig");
+const replicant = @import("zlib-replicant");
 const release = @import("release.zig");
 
 /// Header of the modern releases (1.0.2+): CINFO=7, FLEVEL=3, FCHECK=26.
@@ -19,7 +19,7 @@ pub fn wrapRelease(alloc: std.mem.Allocator, original: []const u8, raw_deflate: 
     const result = try alloc.alloc(u8, length);
     @memcpy(result[0..2], &variant.containerHeader());
     @memcpy(result[2 .. 2 + raw_deflate.len], raw_deflate);
-    const checksum = shared.adler32(1, original);
+    const checksum = replicant.adler32(1, original);
     const tail = result[length - 4 ..];
     tail[0] = @truncate(checksum >> 24);
     tail[1] = @truncate(checksum >> 16);

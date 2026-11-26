@@ -3,6 +3,12 @@
     .version = "2.0.0",
     .fingerprint = 0x55e2b0c0c6d95fe8,
     .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .zlib_replicant = .{
+            .url = "git+https://github.com/rm-netsu/zlib-replicant.git#36a25d41328bf3b7bd7e4552822e61f881054ffd",
+            .hash = "zlib_replicant-0.1.0-ke6LQ3CwAgBUNooKUBIlXqLqi9mBMVnhP3GTM6clqM_W",
+        },
+    },
     .paths = .{
         "build.zig",
         "build.zig.zon",
@@ -13,8 +19,6 @@
         "README.md",
         "EQUIVALENCE.md",
         "BACKLOG.md",
-        "equivalence-results.json",
-        "boundary-results.json",
         "version-matrix.json",
         "zopfli-ordering-bench.json",
     },

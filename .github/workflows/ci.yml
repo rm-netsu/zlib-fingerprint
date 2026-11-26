@@ -4,6 +4,15 @@ on:
   push:
   pull_request:
 
+# The zlib-engine CI moved into the zlib-replicant package together with
+# the engine and its differential-testing infrastructure — see
+# zlib-replicant/.github/workflows/ci.yml (engine unit tests, golden-
+# corpus regression incl. official wrappers, official reference-binary
+# build, streaming + extended one-shot differential matrices, archived
+# results). This workflow keeps the repository-level checks: the
+# fingerprint search, its integration with the engine package, and the
+# sibling miniz / zlib-ng engines.
+
 jobs:
   build-test:
     runs-on: ubuntu-latest
@@ -12,40 +21,14 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: '0.16.0'
-      - name: Unit tests
+      - name: Unit tests (search + zlib-replicant engine)
         run: zig build test
       - name: Release build
         run: zig build -Doptimize=ReleaseFast
-      - name: Regression fixtures (engines + search)
-        run: python3 scripts/regression_check.py --skip-official
+      - name: Regression fixtures (engines + search, official wrappers off)
+        run: python3 zlib-replicant/scripts/regression_check.py --skip-official
       - name: Native miniz + zlib-ng differentials (vs official wrappers)
         run: |
           bash binaries/build-binaries.sh || true
           python3 scripts/diff_native_miniz.py --jobs $(nproc)
           python3 scripts/diff_native_zlibng.py --jobs $(nproc)
-
-  differential:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: mlugg/setup-zig@v2
-        with:
-          version: '0.16.0'
-      - name: Build native tools
-        run: zig build -Doptimize=ReleaseFast
-      - name: Build official zlib release wrappers (30 + 1 releases)
-        run: ZLIB_ONLY=1 bash binaries/build-binaries.sh
-      - name: Regression fixtures (incl. official wrappers)
-        run: python3 scripts/regression_check.py
-      - name: Streaming-API differential matrix
-        run: python3 scripts/stream_matrix.py stream --jobs $(nproc)
-      - name: Extended one-shot differential matrix
-        run: python3 scripts/stream_matrix.py oneshot --jobs $(nproc)
-      - name: Archive results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: differential-results
-          path: |
-            stream-matrix.json
-            oneshot-ext-results.json

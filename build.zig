@@ -4,6 +4,21 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    // The integrated zlib deflate engine (all historical classes A-H) lives
+    // in the separate zlib-replicant package and is imported as the module
+    // name "zlib-replicant". The package also builds the differential-
+    // testing tools (zcompress, plus zlegacy with the original C-core
+    // oracles for classes A-D); this root build installs them into the
+    // repository's zig-out/bin so the regression corpus and the
+    // differential suites keep a single tool location.
+    const zlib_replicant = b.dependency("zlib_replicant", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const replicant_mod = zlib_replicant.module("zlib-replicant");
+    b.installArtifact(zlib_replicant.artifact("zcompress"));
+    b.installArtifact(zlib_replicant.artifact("zlegacy"));
+
     const exe = b.addExecutable(.{
         .name = "zlib-fingerprint",
         .root_module = b.createModule(.{
@@ -12,26 +27,9 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
+    exe.root_module.addImport("zlib-replicant", replicant_mod);
     addZopfliRuntime(exe.root_module);
     b.installArtifact(exe);
-
-    // Development tool: compress stdin exactly like the historical
-    // zlib-<version> wrapper binaries (differential verification harness
-    // for the integrated deflate engine).
-    const zcompress = b.addExecutable(.{
-        .name = "zcompress",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("tools/zcompress.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
-    });
-    zcompress.root_module.addImport("deflate", b.createModule(.{
-        .root_source_file = b.path("src/deflate/deflate.zig"),
-        .target = target,
-        .optimize = optimize,
-    }));
-    b.installArtifact(zcompress);
 
     // Development tool: compress stdin exactly like the miniz-3.1.2
     // wrapper binary (differential harness for the native tdefl port).
@@ -67,22 +65,6 @@ pub fn build(b: *std.Build) void {
     }));
     b.installArtifact(zzlibng);
 
-    const zlegacy = b.addExecutable(.{
-        .name = "zlegacy",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("tools/zlegacy.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
-    });
-    addLegacySources(b, zlegacy.root_module);
-    zlegacy.root_module.addImport("legacy", b.createModule(.{
-        .root_source_file = b.path("src/legacy/legacy.zig"),
-        .target = target,
-        .optimize = optimize,
-    }));
-    b.installArtifact(zlegacy);
-
     // Compare the in-process Zig container / transitional Zopfli backend
     // with the standalone upstream 1.0.3 CLI.
     const zzopfli = b.addExecutable(.{
@@ -93,6 +75,8 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
+    // zopfli/container.zig reuses the engine's shared adler32.
+    zzopfli.root_module.addImport("zlib-replicant", replicant_mod);
     addZopfliRuntime(zzopfli.root_module);
     b.installArtifact(zzopfli);
 
@@ -129,10 +113,19 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
+    unit_tests.root_module.addImport("zlib-replicant", replicant_mod);
     addZopfliRuntime(unit_tests.root_module);
     const run_unit_tests = b.addRunArtifact(unit_tests);
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_unit_tests.step);
+    // The engine's own golden-vector tests (classes A-H) live inside the
+    // zlib-replicant package now; run them from the root `zig build test`
+    // as well, so a single invocation still covers everything it did before
+    // the extraction. The package keeps its own standalone
+    // `cd zlib-replicant && zig build test`.
+    if (zlib_replicant.builder.top_level_steps.get("test")) |dep_tests| {
+        test_step.dependOn(&dep_tests.step);
+    }
 }
 
 /// Zopfli's complete pipeline — LZ77 optimization, block splitting,
@@ -142,44 +135,4 @@ pub fn build(b: *std.Build) void {
 fn addZopfliRuntime(module: *std.Build.Module) void {
     module.link_libc = true;
     module.linkSystemLibrary("m", .{});
-}
-
-/// Compile the four historical zlib generations (classes A-D) into the
-/// `zlegacy` differential-verification tool ONLY. The fingerprint search
-/// itself runs every class through the native Zig engine (the C cores are
-/// retained as independent oracles; exported and cross-TU names are
-/// prefixed per generation so the original 1996–2004 deflate
-/// implementations never collide at link time).
-fn addLegacySources(b: *std.Build, module: *std.Build.Module) void {
-    module.link_libc = true;
-    const symbols = [_][]const u8{
-        "adler32", "deflate", "deflateInit_", "deflateInit2_", "deflateEnd",
-        "deflateReset", "deflateParams", "deflateSetDictionary", "deflateCopy",
-        "deflateBound", "deflatePrime", "_tr_init", "_tr_stored_block",
-        "_tr_flush_block", "_tr_align", "_tr_tally", "zlibVersion",
-        "zlibCompileFlags", "zError", "zcalloc", "zcfree", "z_errmsg",
-        "deflate_copyright", "_dist_code", "_length_code",
-        "compress", "compress2", "compressBound", "crc32", "get_crc_table", "crc32_combine",
-    };
-    for ([_][]const u8{ "a", "b", "c", "d" }) |class| {
-        var flags: [symbols.len + 3][]const u8 = undefined;
-        flags[0] = b.fmt("-Isrc/legacy/vendor/{s}", .{class});
-        flags[1] = b.fmt("-DZF_ENTRY=zf_legacy_{s}", .{class});
-        flags[2] = "-O2";
-        for (symbols, 0..) |symbol, i| {
-            flags[i + 3] = b.fmt("-D{s}=zf_{s}_{s}", .{ symbol, class, symbol });
-        }
-        module.addCSourceFiles(.{
-            .files = &.{
-                b.fmt("src/legacy/vendor/{s}/adler32.c", .{class}),
-                b.fmt("src/legacy/vendor/{s}/compress.c", .{class}),
-                b.fmt("src/legacy/vendor/{s}/crc32.c", .{class}),
-                b.fmt("src/legacy/vendor/{s}/deflate.c", .{class}),
-                b.fmt("src/legacy/vendor/{s}/trees.c", .{class}),
-                b.fmt("src/legacy/vendor/{s}/zutil.c", .{class}),
-                "src/legacy/bridge.c",
-            },
-            .flags = &flags,
-        });
-    }
 }

@@ -40,84 +40,15 @@ fetch() { # fetch <url> <dest-file> (atomic: partial downloads never persist)
 }
 
 # ---------------------------------------------------------------------------
-# zlib family (official versions) via zlib_wrapper.c
+# zlib family (official versions) — the differential-testing oracles of the
+# zlib-replicant engine package. The wrapper sources and the build recipe
+# live IN the package (zlib-replicant/binaries); this script delegates so
+# one shared set of reference wrappers (zlib-<ver>, zstream-<ver>, every
+# release 1.0.1-1.4) lands in this repository's binaries/ directory for
+# both the package suites and the --external-zlib audit mode.
 # ---------------------------------------------------------------------------
-build_zlib() { # build_zlib <version> <url>
-    local ver="$1" url="$2"
-    if check_binary "zlib-$ver"; then return 0; fi
-    echo "[zlib] Building zlib $ver..."
-    local dir
-    if [ -d "$VENDOR/zlib-$ver" ]; then
-        dir="$VENDOR/zlib-$ver"
-    elif [ -d "$VENDOR/zlib-v$ver" ]; then
-        dir="$VENDOR/zlib-v$ver"
-    else
-        fetch "$url" "$VENDOR/zlib-$ver.tar.gz"
-        tar -xzf "$VENDOR/zlib-$ver.tar.gz" -C "$VENDOR"
-        if [ -d "$VENDOR/zlib-v$ver" ]; then dir="$VENDOR/zlib-v$ver"; else dir="$VENDOR/zlib-$ver"; fi
-    fi
-    # Build the REAL version library first; linking against it is what makes
-    # the wrapper genuinely reproduce this version's bitstream behavior
-    # (linking -lz against the system lib would silently fake the version).
-    ( cd "$dir" \
-      && ./configure --static >/dev/null 2>&1 \
-      && make -j"$(nproc)" libz.a >/dev/null 2>&1 )
-    ( cd "$dir" && gcc -O3 "$CDIR/zlib_wrapper.c" -I. -L. -lz -o "$CDIR/zlib-$ver$EXT" )
-    echo "-> built zlib-$ver$EXT"
-}
-
-# Scenario-driven streaming wrapper (chunked input, flush operations, capped
-# avail_out, deflateParams/SetDictionary/Reset/Copy) around the same
-# version-specific static library.
-build_zstream() { # build_zstream <version> <url>
-    local ver="$1" url="$2"
-    if check_binary "zstream-$ver"; then return 0; fi
-    echo "[zstream] Building zstream $ver..."
-    local dir
-    if [ -d "$VENDOR/zlib-$ver" ]; then
-        dir="$VENDOR/zlib-$ver"
-    elif [ -d "$VENDOR/zlib-v$ver" ]; then
-        dir="$VENDOR/zlib-v$ver"
-    else
-        fetch "$url" "$VENDOR/zlib-$ver.tar.gz"
-        tar -xzf "$VENDOR/zlib-$ver.tar.gz" -C "$VENDOR"
-        if [ -d "$VENDOR/zlib-v$ver" ]; then dir="$VENDOR/zlib-v$ver"; else dir="$VENDOR/zlib-$ver"; fi
-    fi
-    ( cd "$dir" \
-      && ./configure --static >/dev/null 2>&1 \
-      && make -j"$(nproc)" libz.a >/dev/null 2>&1 )
-    ( cd "$dir" && gcc -O2 "$CDIR/zstream_wrapper.c" -I. -L. -lz -o "$CDIR/zstream-$ver$EXT" )
-    echo "-> built zstream-$ver$EXT"
-}
-
-GITHUB_ZLIB="https://github.com/madler/zlib/archive/refs/tags"
-# Historical, potentially bitstream-distinct releases. These are deliberately
-# NOT marked covered by the integrated 1.2.3+ engine. All versions are
-# fetched from the upstream GitHub mirror (faster than zlib.net/fossils and
-# serving identical release sources); the only tag missing there is v1.0.6,
-# which keeps the fossils URL.
-for ver in 1.0.1 1.0.2 1.0.4 1.0.5 1.0.7 1.0.8 1.0.9 \
-           1.1.0 1.1.1 1.1.2 1.1.3 1.1.4; do
-    build_zlib "$ver" "$GITHUB_ZLIB/v$ver.tar.gz"
-    build_zstream "$ver" "$GITHUB_ZLIB/v$ver.tar.gz"
-done
-build_zlib    "1.0.6" "https://zlib.net/fossils/zlib-1.0.6.tar.gz"
-build_zstream "1.0.6" "https://zlib.net/fossils/zlib-1.0.6.tar.gz"
-for ver in 1.2.0 1.2.1 1.2.2; do
-    build_zlib "$ver" "$GITHUB_ZLIB/v$ver.tar.gz"
-    build_zstream "$ver" "$GITHUB_ZLIB/v$ver.tar.gz"
-done
-for ver in 1.2.3 1.2.4 1.2.5 1.2.6 1.2.7 1.2.8 1.2.9 1.2.10 1.2.11 \
-           1.2.12 1.2.13 1.3; do
-    build_zlib "$ver" "$GITHUB_ZLIB/v$ver.tar.gz"
-    build_zstream "$ver" "$GITHUB_ZLIB/v$ver.tar.gz"
-done
-build_zlib    "1.3.1" "https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz"
-build_zstream "1.3.1" "https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz"
-build_zlib    "1.3.2" "$GITHUB_ZLIB/v1.3.2.tar.gz"
-build_zstream "1.3.2" "$GITHUB_ZLIB/v1.3.2.tar.gz"
-build_zlib    "1.4" "$GITHUB_ZLIB/v1.4.tar.gz"
-build_zstream "1.4" "$GITHUB_ZLIB/v1.4.tar.gz"
+OUT_DIR="$CDIR" VENDOR_DIR="$CDIR/vendor" \
+    bash "$CDIR/../zig-pkg/zlib_replicant-0.1.0-ke6LQ3CwAgBUNooKUBIlXqLqi9mBMVnhP3GTM6clqM_W/binaries/build-references.sh"
 
 # Differential matrix can build only stock zlib releases, without fetching
 # optional third-party implementations.

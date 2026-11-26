@@ -34,10 +34,19 @@ When compiling a specific version of official zlib (e.g., `1.2.8`), name the out
 
 ```bash
 gcc -O3 zlib_wrapper.c -lz -o zlib-1.2.8
-
 ```
 
-```
+## zlib reference wrappers (zlib-<ver> / zstream-<ver>)
+
+The official stock-zlib wrappers for every release 1.0.1-1.4 are
+the differential-testing oracles of the **zlib-replicant** engine package:
+their wrapper sources (`zlib_wrapper.c`, `zstream_wrapper.c`)
+and the build recipe live there, and `build-binaries.sh` delegates
+the whole family to the package's `zlib-replicant/binaries/build-references.sh`
+with `OUT_DIR`/`VENDOR_DIR` pointing here. `ZLIB_ONLY=1 bash build-binaries.sh`
+builds just this family.
+
+---
 
 ## Oracle notes (native ports)
 

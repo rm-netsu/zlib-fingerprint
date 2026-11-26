@@ -6,13 +6,13 @@ All **30 official stable releases available in this comparison** from 1.0.1
 through 1.3.2 were built from their own sources and linked statically into
 the version-specific C wrapper. No system-zlib substitution was used.
 
-`scripts/equivalence_matrix.py --depth quick` ran 10,200 identical cases per
+`zlib-replicant/scripts/equivalence_matrix.py --depth quick` ran 10,200 identical cases per
 version (306,000 invocations): 68 data/size fixtures, five compression levels,
 three memory levels, five strategies and two window sizes, single input and
 `Z_FINISH`, with enough output space for one call. Cases cover empty data,
 repeated strings, periodic strings, seeded random bytes, sparse data and sizes
 around 16 KiB, 32 KiB and 64 KiB (up to 262,144 bytes). Results are stored in
-`equivalence-results.json` with per-version SHA-256 signatures and first
+`zlib-replicant/results/equivalence-results.json` with per-version SHA-256 signatures and first
 distinguishing cases for every non-equivalent pair.
 
 Eight empirical classes when **return status is part of the signature**:
@@ -28,7 +28,7 @@ Eight empirical classes when **return status is part of the signature**:
 | G | 1.2.9 | 1.2.9 |
 | H | 1.2.10, 1.2.11, 1.2.12, 1.2.13, 1.3, 1.3.1, 1.3.2 | 1.3.2 |
 
-The boundary experiment `scripts/probe_boundaries.py` additionally varies
+The boundary experiment `zlib-replicant/scripts/probe_boundaries.py` additionally varies
 `avail_out` (64, 1024, 32768 bytes or unrestricted), yielding concrete
 successful-output differences:
 
@@ -64,7 +64,7 @@ executable dropped its last algorithmic C code:
 | native representative vs every official class-member binary (1.0.1 … 1.2.0, 16 releases) | included above | **0** |
 | decompression round-trip of every produced stream | included above | **0** |
 
-Tool: `scripts/diff_native_legacy.py` (fixtures: empty/repeat/periodic/
+Tool: `zlib-replicant/scripts/diff_native_legacy.py` (fixtures: empty/repeat/periodic/
 random/sparse/heuristic-trigger/text inputs up to 262,144 bytes including
 all stored-block and window boundaries; levels 0-9, memLevel 1/8(/9),
 strategies 0-2, windowBits 9/15 plus the windowBits-8 level-0 paths;
@@ -143,7 +143,7 @@ Class D (1.2.1–1.2.2) uses the same Zig `fast_1_2_3`, `slow_1_2_3`,
 `stored_legacy`, `state` and `trees` modules as 1.2.3, with `Z_FIXED`
 rejected at the parameter-validation boundary. Its separate C source
 remains available as an independent oracle in `zlegacy`.
-`scripts/diff_native_class_d.py` matched 2,592 common-success streams in
+`zlib-replicant/scripts/diff_native_class_d.py` matched 2,592 common-success streams in
 3,168 safe probes against the original 1.2.2 wrapper. This validates the
 covered one-shot inputs and does **not** prove equivalence for streaming APIs.
 Classes A–C are native since the 2026-11-25 port (see above); the
@@ -151,11 +151,11 @@ production build no longer compiles any algorithmic zlib C source.
 
 ### Independent native-port re-audit (2026-10-27)
 
-`scripts/audit_native_port.py` compares native Zig output to official
+`zlib-replicant/scripts/audit_native_port.py` compares native Zig output to official
 per-release zlib wrappers using 33 deterministic fixtures (empty, repeated,
 periodic, random, block-boundary and match-boundary inputs up to 262144 bytes),
 varied compression levels, `memLevel`, strategies, and window sizes.
-The reproducible output is `native-port-audit.json`.
+The reproducible output is `zlib-replicant/results/native-port-audit.json`.
 
 | Scope | Differential attempts | Differences |
 |---|---:|---:|
@@ -163,8 +163,8 @@ The reproducible output is `native-port-audit.json`.
 | Every release zlib 1.2.3–1.3.2 (14 versions) | 21,252 | 0 |
 | Total native-Zig audit | **22,506** | **0** |
 
-The existing `scripts/diff_engine.py` suite also passed 1,080/1,080
-comparisons, and `scripts/diff_legacy_native.py` passed 9,088 additional
+The existing `zlib-replicant/scripts/diff_engine.py` suite also passed 1,080/1,080
+comparisons, and `zlib-replicant/scripts/diff_legacy_native.py` passed 9,088 additional
 safe comparisons of statically linked A–D C adapters against independent
 original wrappers, skipping 1,152 potentially unsafe historical C cases.
 The targeted class-D test passed 3,168 probes, including 2,592 common-success
@@ -181,11 +181,11 @@ as mathematical proof of full API identity.
 
 ```sh
 ZLIB_ONLY=1 bash binaries/build-binaries.sh
-python3 scripts/equivalence_matrix.py --depth quick --out equivalence-results.json
-python3 scripts/probe_boundaries.py
+python3 zlib-replicant/scripts/equivalence_matrix.py --depth quick --out zlib-replicant/results/equivalence-results.json
+python3 zlib-replicant/scripts/probe_boundaries.py
 zig build -Doptimize=ReleaseFast
-python3 scripts/diff_legacy_native.py
-python3 scripts/diff_native_legacy.py   # native A-C vs C cores + member binaries
+python3 zlib-replicant/scripts/diff_legacy_native.py
+python3 zlib-replicant/scripts/diff_native_legacy.py   # native A-C vs C cores + member binaries
 ```
 
 `--depth full` also sweeps every level 0–9 and additional `memLevel=4`;
@@ -287,18 +287,18 @@ and after every chunk, mid-stream `deflateParams`, `deflateSetDictionary`
 plus a single-`Z_FINISH` mode byte-identical to the historical one-shot
 wrapper (cross-checked: 31 releases x 16 scenarios, 0 mismatches).
 
-Tools: `scripts/stream_matrix.py stream` (710 scenarios, 22,010 runs,
-31 releases 1.0.1-1.4) and `scripts/stream_matrix.py oneshot`
+Tools: `zlib-replicant/scripts/stream_matrix.py stream` (710 scenarios, 22,010 runs,
+31 releases 1.0.1-1.4) and `zlib-replicant/scripts/stream_matrix.py oneshot`
 (full-depth one-shot matrix: 8,403 cases, 260,493 runs, levels 0-9,
 memLevel 1/4/8/9, strategies 0-4, windowBits 9/15 over 21 boundary
 fixtures incl. MIN_MATCH/MAX_MATCH repeats and exact lit_bufsize
 boundaries, plus a 2 MiB mixed input at levels 1/6/9). Results:
-`stream-matrix.json`, `oneshot-ext-results.json`.
+`zlib-replicant/results/stream-matrix.json`, `zlib-replicant/results/oneshot-ext-results.json`.
 
 ### Refined equivalence structure
 
 The one-shot byte classes A-H stand; the *streaming* surface splits four
-of them further (all witnesses recorded in `stream-matrix.json`):
+of them further (all witnesses recorded in `zlib-replicant/results/stream-matrix.json`):
 
 | Pair | Kind | Evidence |
 |---|---|---|
@@ -397,10 +397,10 @@ validation shape (level 1-9, windowBits 8-15) are source-identical to
 
 ## ASan/UBSan validation of the documented unstable paths (2026-11-26)
 
-`scripts/asan_unstable.py` rebuilds 1.0.5, 1.0.9, 1.2.0, 1.2.2, 1.2.4,
+`zlib-replicant/scripts/asan_unstable.py` rebuilds 1.0.5, 1.0.9, 1.2.0, 1.2.2, 1.2.4,
 1.2.8, 1.2.9, 1.2.11 with
 `-fsanitize=address,undefined -fno-sanitize-recover=all` and runs the
-excluded paths plus controls. Results in `asan-results.json`:
+excluded paths plus controls. Results in `zlib-replicant/results/asan-results.json`:
 
 * class A level 0 with memLevel 1/4/7: **heap-buffer-overflow** in
   `deflate_stored` (pending-buffer overrun) - the search's exclusion is
@@ -425,10 +425,10 @@ excluded paths plus controls. Results in `asan-results.json`:
 
 ## Build-option output equivalence (2026-11-26)
 
-`scripts/build_options_check.py` compiles 1.1.4, 1.2.3 and 1.2.11 with
+`zlib-replicant/scripts/build_options_check.py` compiles 1.1.4, 1.2.3 and 1.2.11 with
 `-O0`, `-O3`, `-DUNALIGNED_OK` and `-DDEBUG` and compares 180
 fixture/parameter combinations against the default build:
-**byte-identical everywhere** (`build-options-results.json`).
+**byte-identical everywhere** (`zlib-replicant/results/build-options-results.json`).
 `-DFASTEST` (available since 1.1.0) legitimately changes the output
 (forces level 1, no hash chains): 12 of 60 FASTEST comparisons differ,
 the rest coincide with the default build on these fixtures. x86-64
@@ -449,16 +449,26 @@ and on 24 MiB inputs.
 
 ## Regression fixtures and CI (2026-11-26)
 
-`fixtures-regression/` + `scripts/regression_check.py` pin 16 minimal
+`zlib-replicant/fixtures-regression/` + `zlib-replicant/scripts/regression_check.py` pin 16+4 minimal
 witnesses (every class boundary, the wbits-8 data-losing stream, the
 1.2.9 truncated empty stream, Zopfli 1.0.0/1.0.1/1.0.3 identification,
-zlib 1.4) as golden streams with SHA-256 manifests. The check verifies
-golden integrity, official-wrapper reproduction, native-engine
-byte-exactness and the end-to-end search identification (expected
-version range and parameters). The generator self-validates every
-search expectation against the actual tool output.
-`.github/workflows/ci.yml` runs the unit tests, the regression check and
-both differential matrices on every push.
+zlib 1.4, miniz/zlib-ng representatives) as golden streams with SHA-256
+manifests. The whole corpus moved into the zlib-replicant package
+together with the engine's differential stack; the checker resolves the
+tools of both the package and the enclosing repository (refenv.py) and
+skips companion-engine cases when their tools are absent. The engine's
+own CI moved into the package as well — `zlib-replicant/.github/
+workflows/ci.yml` runs the engine unit tests, the golden-corpus
+regression incl. official wrappers, and both differential matrices on
+every push; the repository-level `.github/workflows/ci.yml` keeps the
+search, package-integration and sibling-engine checks. The dependency
+form of the package is lightweight by design: `.paths` in
+`zlib-replicant/build.zig.zon` ships only `src/` + build files + README,
+so a fetched copy carries the engine alone while the oracles, suites,
+golden corpus and CI stay in the development repository (documented in
+`zlib-replicant/DEV.md`; the engine consumed from the dependency form was
+verified byte-identical to the development harness across 2,336
+class-A-H comparisons).
 
 The regression harness immediately paid off: it caught the search never
 trying `Z_RLE` at levels other than 9 (a wrong "level does not matter"
