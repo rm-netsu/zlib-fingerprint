@@ -34,10 +34,15 @@ pub const ImplType = enum {
     zopfli,
     /// Zopfli in-process: fully native Zig optimizer (no C kernel linked).
     zopfli_native,
+    /// miniz wrapper binary: `level` (1..10).
+    miniz,
+    /// miniz in-process: native Zig tdefl port (levels 1..10).
+    miniz_native,
     /// libdeflate wrapper: `level` (1..12).
     libdeflate,
-    /// miniz wrapper: `level` (1..10).
-    miniz,
+    /// zlib-ng 2.2.1 (compat) in-process: native Zig port (level/memLevel/
+    /// strategy; windowBits fixed to 15 like the reference wrapper).
+    zlibng_native,
     /// AdvanceCOMP advdef: recompresses a zlib stream file in place (`-L -z -k`).
     advdef,
 };
@@ -171,8 +176,10 @@ pub const profiles = [_]Profile{
     .{ .name = "zlib 1.0.4",        .binary = "zlib-1.0.4",         .impl_type = .legacy_zlib, .prior = 24 },
     .{ .name = "zlib 1.0.2",        .binary = "zlib-1.0.2",         .impl_type = .legacy_zlib, .prior = 25 },
     .{ .name = "zlib 1.0.1",        .binary = "zlib-1.0.1",         .impl_type = .legacy_zlib, .prior = 26 },
-    .{ .name = "zlib-ng 2.2.1",     .binary = "zlib-ng-2.2.1",      .impl_type = .zlib_family, .prior = 27 },
+    .{ .name = "zlib-ng 2.2.1",     .binary = "zlib-ng-2.2.1",      .impl_type = .zlib_family, .prior = 27, .covered_by_integrated = true },
+    .{ .name = "zlib-ng 2.2.1 (in-process)", .binary = "(zlibng-native)", .impl_type = .zlibng_native, .prior = 27 },
     .{ .name = "libdeflate 1.20",   .binary = "libdeflate-1.20",    .impl_type = .libdeflate,  .prior = 28 },
+    .{ .name = "miniz 3.1.2 (in-process)", .binary = "(miniz-native)", .impl_type = .miniz_native, .prior = 29 },
     .{ .name = "miniz 3.1.2",       .binary = "miniz-3.1.2",        .impl_type = .miniz,       .prior = 29 },
     .{ .name = "zopfli 1.0.3 (in-process)", .binary = "(zopfli-native)", .impl_type = .zopfli_native, .prior = 30, .release = .v1_0_3 },
     // 1.0.2 is byte-identical to 1.0.3 (only a malloc cast differs); the
@@ -238,10 +245,15 @@ test "integrated coverage flags match the engine's verified range" {
                 // covered; 1.3.2/1.4 are covered for the verified one-shot
                 // producer model plus the 710-scenario streaming matrix
                 // (see EQUIVALENCE.md).
+                // zlib-ng is covered by the native zlib-ng engine
+                // (src/zlibng/), not by the stock-zlib integrated engine —
+                // the flag's meaning is "reproduced bit-exactly in-process
+                // in the default search mode".
                 const covered_versions = [_][]const u8{
                     "zlib 1.2.3", "zlib 1.2.5", "zlib 1.2.7", "zlib 1.2.8",
                     "zlib 1.2.11", "zlib 1.2.12", "zlib 1.2.13", "zlib 1.3", "zlib 1.3.1", "zlib 1.3.2",
                     "zlib 1.4",
+                    "zlib-ng 2.2.1",
                 };
                 var should_cover = false;
                 for (covered_versions) |v| {

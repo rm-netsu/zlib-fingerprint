@@ -30,6 +30,8 @@ comptime {
     _ = @import("zopfli/deflate_driver.zig");
     _ = @import("zopfli/tree.zig");
     _ = @import("zopfli/katajainen.zig");
+    _ = @import("miniz/tdefl.zig");
+    _ = @import("zlibng/deflate.zig");
 }
 
 const usage_text =
@@ -44,8 +46,9 @@ const usage_text =
     \\CINFO (windowBits), FLEVEL (level/strategy class), FDICT and the
     \\first DEFLATE block type.
     \\
-    \\By default eight historical stock-zlib classes and Zopfli are compressed
-    \\in-process (Zopfli's optimizer is a fully native Zig port).
+    \\By default eight historical stock-zlib classes, zlib-ng, Zopfli and miniz
+    \\compressed in-process (fully native Zig ports, no algorithmic C
+    \\kernel is compiled into the build).
     \\
     \\Options:
     \\  -v, --verbose    print every candidate attempt
@@ -275,11 +278,11 @@ pub fn main(init: std.process.Init) !u8 {
         rep.line("- Implementation: {s}", .{m.profile.name});
         rep.line("- Stage         : {s}", .{m.stage.label()});
         switch (m.profile.impl_type) {
-            .integrated, .zlib_family, .legacy_zlib => rep.line("- Parameters    : level={d}, memLevel={d}, strategy={s}, windowBits={d}", .{
+            .integrated, .zlib_family, .legacy_zlib, .zlibng_native => rep.line("- Parameters    : level={d}, memLevel={d}, strategy={s}, windowBits={d}", .{
                 m.level, m.mem_level, profiles_mod.STRATEGY_NAMES[@min(m.strategy, 4)], m.window_bits,
             }),
             .zopfli, .zopfli_native => rep.line("- Parameters    : iterations={d}", .{m.iterations}),
-            .libdeflate, .miniz => rep.line("- Parameters    : level={d}", .{m.level}),
+            .libdeflate, .miniz, .miniz_native => rep.line("- Parameters    : level={d}", .{m.level}),
             .advdef => rep.line("- Parameters    : level=-{d}", .{m.level}),
         }
         if (m.version_range.len > 0) {

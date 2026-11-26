@@ -108,6 +108,42 @@
 `oneshot-ext-results.json`, `asan-results.json`, `build-options-results.json`,
 `zopfli-matrix-ext.json`.
 
+## Нативные порты zlib-ng и miniz (2026-11-27)
+
+- [x] Изучить оставшиеся внешние zlib-семейства: zlib-ng 2.2.1 (compat),
+  libdeflate 1.20, miniz 3.1.2, advdef 2.6 (по источникам: advdef -0/-1 —
+  это zlib с memLevel=9 и windowBits по размеру входа; -2 — libdeflate-12;
+  -3 — 7-zip deflate; -4 — zopfli(5) с заменой на libdeflate-12, если тот
+  меньше). Нативно реализованы zlib-ng и miniz; libdeflate (4 алгоритма:
+  fastest/greedy/lazy/lazy2/near-optimal по уровням 1-12, ~3000 строк) и
+  7-zip deflate остались внешними.
+- [x] Нативный порт miniz 3.1.2 (tdefl) в `src/miniz/tdefl.zig`: скалярная
+  конфигурация релизной амальгамации (UNALIGNED_* по умолчанию 0 — уровень 1
+  идёт жадным tdefl_compress_normal, fast-путь не компилируется), все
+  уровни 0-10, raw-блоки уровня 0, FLEVEL по обратному поиску probe-таблицы.
+  Сверка `scripts/diff_native_miniz.py`: 340/340 побайтово (+ round-trip
+  каждого потока).
+- [x] Нативный порт zlib-ng 2.2.1 (compat) в `src/zlibng/deflate.zig`: все
+  функции стратегий дефолтной сборки (stored/quick/fast/medium/slow/rle/huff),
+  обе хеш-функции (целочисленная и rolling для уровня 9), оба варианта
+  longest_match (с offset-поиском slow-варианта), 64-битный bi_buf, LIT_MEM,
+  union-семантика ct_data, прямые stored-блоки deflate_stored, windowBits=15
+  как у обёртки. Сверка `scripts/diff_native_zlibng.py`: 110/110 (стресс) и
+  матрица 450/450 (level x memLevel x strategy, --full); 640 фикстурных
+  прогонов побайтово.
+- [x] Интеграция в поиск: профили «zlib-ng 2.2.1 (in-process)» и
+  «miniz 3.1.2 (in-process)»; внешние бинарники остаются для
+  `--external-zlib`-аудита; предсказание заголовков через общие формулы
+  (заголовок zlib-ng compat побайтово совпадает с stock zlib).
+- [x] Регрессионные золотые свидетели: miniz-greedy1, miniz-lazy4,
+  zlibng-quick1 (уникальный static-block путь zlib-ng), zlibng-medium6
+  (честный коллапс в integrated); CI прогоняет обе дифференциальные сверки.
+- [ ] Нативный порт libdeflate 1.20 (уровни 1-12: fastest + greedy + lazy +
+  lazy2 + near-optimal + block splitting + оптимальный precode) — остаётся
+  внешним бинарником.
+- [ ] Нативный 7-zip deflate (advdef -3) и нативная композиция advdef -2/-4
+  (зависит от libdeflate-12) — остаются внешними.
+
 ## Zopfli 1.0.3 — поэтапный перенос в Zig
 
 - [x] Загрузить официальный исходный код 1.0.3 и сохранить лицензию.

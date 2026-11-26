@@ -487,5 +487,114 @@
     "search_expects": [
       "zopfli 1.0.2-1.0.3"
     ]
+  },
+  {
+    "id": "miniz-lazy4",
+    "description": "miniz 3.1.2 tdefl level 4 stream (identical to level 2 on this payload: probes 6/16 find no matches here, honest reproducer is level 2)",
+    "payload": "payloads/mixed-20k.bin",
+    "producer": {
+      "implementation": "miniz",
+      "version": "3.1.2",
+      "params": [
+        4
+      ]
+    },
+    "golden": "golden/miniz-lazy4.zlib",
+    "golden_sha256": "30974a0422055b40ff8d82dfb7e961ede0f0a2153c9d9a1c602b7e604b98a296",
+    "engine": {
+      "tool": "zminiz",
+      "version": "3.1.2",
+      "args": [
+        "4"
+      ]
+    },
+    "search_expects": [
+      "miniz 3.1.2 (in-process)",
+      "level=2"
+    ]
+  },
+  {
+    "id": "miniz-greedy1",
+    "description": "miniz 3.1.2 tdefl greedy level 1 (probes=1; the released scalar build runs compress_normal, not compress_fast)",
+    "payload": "payloads/mixed-20k.bin",
+    "producer": {
+      "implementation": "miniz",
+      "version": "3.1.2",
+      "params": [
+        1
+      ]
+    },
+    "golden": "golden/miniz-greedy1.zlib",
+    "golden_sha256": "3f48a0c87f624f6d8832b1bb97e3507a5ac51ad1a898c48e7211b55ebf818284",
+    "engine": {
+      "tool": "zminiz",
+      "version": "3.1.2",
+      "args": [
+        "1"
+      ]
+    },
+    "search_expects": [
+      "miniz 3.1.2",
+      "level=1"
+    ]
+  },
+  {
+    "id": "zlibng-quick1",
+    "description": "zlib-ng 2.2.1 (compat) deflate_quick level 1: static-tree quick path unique to zlib-ng",
+    "payload": "payloads/mixed-20k.bin",
+    "producer": {
+      "implementation": "zlib-ng",
+      "version": "2.2.1",
+      "params": [
+        1,
+        8,
+        0,
+        15
+      ]
+    },
+    "golden": "golden/zlibng-quick1.zlib",
+    "golden_sha256": "f7ccf82c8a1e5bc39c7c34ccd5465655e455adcf015ff724780b3ed8afd07651",
+    "engine": {
+      "tool": "zzlibng",
+      "version": "2.2.1",
+      "args": [
+        "1",
+        "8",
+        "0",
+        "15"
+      ]
+    },
+    "search_expects": [
+      "zlib-ng 2.2.1 (in-process)",
+      "level=1"
+    ]
+  },
+  {
+    "id": "zlibng-medium6",
+    "description": "zlib-ng 2.2.1 (compat) deflate_medium level 6 (default); byte-identical to stock zlib 6 on this payload: honest collapse to the integrated engine first",
+    "payload": "payloads/mixed-20k.bin",
+    "producer": {
+      "implementation": "zlib-ng",
+      "version": "2.2.1",
+      "params": [
+        6,
+        8,
+        0,
+        15
+      ]
+    },
+    "golden": "golden/zlibng-medium6.zlib",
+    "golden_sha256": "35fd44f09e6f0fd046c28281fd0a7b445ff7ab0b4ffa776363b1db3b439c1c23",
+    "engine": {
+      "tool": "zzlibng",
+      "version": "2.2.1",
+      "args": [
+        "6",
+        "8",
+        "0",
+        "15"
+      ]
+    },
+    "search_expects": []
   }
 ]

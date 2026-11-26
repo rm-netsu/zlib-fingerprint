@@ -169,6 +169,58 @@ release binary (1.0.1 … 1.2.0), and a decompression round-trip of every
 produced stream — zero mismatches, with the 624 oracle-unsafe probes
 (class A level 0 with memLevel < 8) skipped and counted.
 
+### zlib-ng 2.2.1 (compat) — fully native Zig port
+
+zlib-ng is available in the default fingerprint search **in-process**
+without a subprocess or any linked C code, byte-exact against the official
+2.2.1 sources in zlib-compat mode. The complete port covers every
+strategy function of the default release configuration —
+`deflate_stored` (level 0), `deflate_quick` (level 1; the static-block
+fast path), `deflate_fast` (level 2), `deflate_medium` (levels 3-6; the
+zlib-ng-specific lazy/next-match algorithm with `insert_match` and
+`fizzle_matches`), `deflate_slow` (levels 7-9, including the level-9
+rolling hash and the `longest_match_slow` offset-search variant),
+`deflate_rle` and `deflate_huff` — plus the shared machinery: the integer
+hash (`h = LE32*2654435761 >> 16`) and rolling hash insert variants,
+`fill_window` with high-water WIN_INIT zeroing, the 64-bit `bi_buf` bit
+output, trees.c (build/scan/send trees, gen_bitlen/gen_codes with the
+ct_data union semantics), the LIT_MEM symbol buffers, `deflate_stored`'s
+direct-copy one-shot layout, the zlib header (zlib-ng's FLEVEL formula is
+byte-identical to stock zlib's) and the MSB Adler-32 trailer.
+`windowBits` is fixed to 15 exactly like the reference wrapper (it accepts
+the argument but passes a literal 15 to `deflateInit2`). The
+`UNALIGNED64` filter semantics of `longest_match` (2/4/8-byte
+scan_start/scan_end checks by best_len class) are preserved; the
+arch-dispatched AVX2/SSE2 kernels of the reference compute the same
+values as the ported generic kernels — verified empirically by the
+differential matrix.
+
+Verification: `python3 scripts/diff_native_zlibng.py` (110 runs: 10
+levels × the reference wrapper + 60 randomized stress cases) and with
+`--full` the complete `(level 0-9) × (memLevel 1,4,9) × (strategy 0-4)`
+parameter matrix (450 combinations) — **0 mismatches**; every compared
+stream also round-trips through zlib decompression. The upstream 2.2.1
+sources remain in `binaries/vendor/zlib-ng-2.2.1/` as the reference.
+
+### miniz 3.1.2 — fully native Zig tdefl port
+
+miniz is available in the default fingerprint search **in-process**,
+byte-exact against the released 3.1.2 amalgamation *as published*: the
+release defaults `MINIZ_USE_UNALIGNED_LOADS_AND_STORES` to 0 on every
+architecture, so the reference wrappers compile the scalar variants —
+byte-wise `tdefl_find_match`, the plain `tdefl_compress_lz_codes`, and
+greedy `tdefl_compress_normal` for level 1 (`tdefl_compress_fast` is not
+compiled). The port preserves the `mz_compress2` one-shot call model
+(`mem_level` validated but ignored, window bits 15, default strategy),
+the probe-table level mapping
+(`{0,1,6,32,16,32,128,256,512,768,1500}` with the greedy flag for levels
+≤ 3), the raw-block fallback and the level-0 raw-block mode, and the
+miniz FLEVEL computation by reversing the probe-table lookup.
+
+Verification: `python3 scripts/diff_native_miniz.py` — 340 runs (20
+fixtures × levels 0-10 + 120 randomized stress cases), **0 mismatches**;
+every compared stream also round-trips through zlib decompression.
+
 ### Where the output actually changed (1.0.1 → 1.3.2)
 
 Established by diffing every release, by the ~29 000-combination
@@ -253,19 +305,24 @@ path only in the stage-3 sweep, and this port models the idealized
 |---------|------|------------|
 | zlib (integrated), 1.2.3 – 1.4 | in-process | full `level memLevel strategy windowBits` matrix; 1.4 verified byte-identical to 1.3.2 (full-depth one-shot + 710 streaming scenarios) |
 | zlib class D, 1.2.1–1.2.2 | native Zig (shared 1.2.3 engine, historical strategy limits) | verified with original 1.2.2 oracle; all releases available with `--external-zlib` |
+| zlib-ng 2.2.1 (compat) | in-process | full `level memLevel strategy` matrix, windowBits fixed to 15 like the reference wrapper; 640 fixture runs + 450-case parameter matrix + 60 randomized stress runs byte-exact against the official 2.2.1 sources (`scripts/diff_native_zlibng.py`); the external binary remains for `--external-zlib` audits |
+| miniz 3.1.2 | in-process | tdefl levels 0–10; 340 differential runs byte-exact against the reference wrapper (`scripts/diff_native_miniz.py`, includes the scalar-build semantics of the released amalgamation); the external binary remains for `--external-zlib` audits |
 | zlib classes A–C, 1.0.1–1.2.0 | native Zig (class-specific variants: A stored layout, B `_tr_tally` heuristic, legacy FLEVEL/fill_window) | verified against the original C cores and all 16 official member binaries; C oracles kept in the `zlegacy` dev tool; byte-identical coverage extends back to zlib 0.99 (0.95 emits the same bytes within its smaller API) |
 | zlib 1.2.3 / 1.2.5 / 1.2.7 / 1.2.8 / 1.2.11 / 1.2.12 / 1.2.13 / 1.3 / 1.3.1 / 1.3.2 | external binaries | skipped in default mode (integrated); enabled with `--external-zlib` |
-| zlib-ng 2.2.1 (compat) | external binary | `level memLevel strategy`, windowBits fixed to 15 |
+| zlib-ng 2.2.1 (compat) | external binary | `level memLevel strategy`, windowBits fixed to 15; default mode uses the in-process native port instead |
 | Zopfli 1.0.3 / 1.0.2 / 1.0.1 / 1.0.0 | in-process | release-specific behaviour (header, tree encoder, block selection); 1.0.2 collapsed into the 1.0.3 representative (byte-identical), reported as `zopfli 1.0.2-1.0.3` |
 | Zopfli 1.0.3 | external binary | `--zlib -c --iN <file>`; header `0x78 0xDA`; enabled with `--external-zlib` |
 | libdeflate 1.20 | external binary | `level` (1–12) |
-| miniz 3.1.2 | external binary | `level` (1–10) |
+| miniz 3.1.2 | external binary | `level` (1–10); default mode uses the in-process native tdefl port instead |
 | AdvanceCOMP 2.6 advdef | external binary | `-L -z -k` on a temp file; last resort |
 
 Missing binaries are detected once up front and their profiles are
 skipped. Without any external binaries, the tool fingerprints all eight
-historical stock zlib classes from 0.99/1.0.1–1.4 in the tested one-shot
-model (plus the streaming refinements documented in EQUIVALENCE.md).
+historical stock zlib classes from 0.99/1.0.1–1.4, zlib-ng 2.2.1 (compat),
+miniz 3.1.2 and Zopfli 1.0.0–1.0.3 natively in-process, in the tested
+one-shot model (plus the streaming refinements documented in
+EQUIVALENCE.md). libdeflate 1.20, AdvanceCOMP advdef and the per-release
+stock-zlib audit binaries remain external.
 
 The earlier classes are A (1.0.1–1.0.5), B (1.0.6–1.0.9), C
 (1.1.0–1.2.0) and D (1.2.1–1.2.2). Their in-process priority is
@@ -424,7 +481,15 @@ src/
 ├── hints.zig          # header parsing, FLEVEL mapping, header prediction
 ├── profiles.zig       # implementation table (priorities, integrated coverage)
 ├── ui.zig             # SGR colors + live progress
-└── deflate/           # integrated historical zlib engine
+├── deflate/           # integrated historical zlib engine
+├── zlibng/            # native zlib-ng 2.2.1 (compat) engine
+│   ├── deflate.zig    # full port: stored/quick/fast/medium/slow/rle/huff,
+│   │                  # longest_match (+slow variant), integer & rolling
+│   │                  # hashes, trees, one-shot driver
+│   └── tables.zig     # static trees/codes extracted from the 2.2.1 sources
+└── miniz/
+    ├── tdefl.zig      # native miniz 3.1.2 tdefl port (scalar released build)
+    └── tables.zig     # len/dist tables extracted from the 3.1.2 sources
     ├── deflate.zig    # version registry (1.2.2–1.3.2 / 4 byte-output classes), dispatch,
     │                  # one-shot compressor with early-abort comparison
     ├── state.zig      # shared deflate_state, bit output, window, hash,
@@ -439,11 +504,18 @@ src/
     ├── rle.zig        # deflate_rle,   zlib 1.2.4+
     └── huff.zig       # deflate_huff,  zlib 1.2.4+
 tools/
-└── zcompress.zig      # dev tool: stdin -> stdout like zlib-<version> wrappers
+├── zcompress.zig      # dev tool: stdin -> stdout like zlib-<version> wrappers
+├── zzlibng.zig        # dev tool: stdin -> stdout like zlib-ng-2.2.1 (differential
+│                      # harness for the native zlib-ng port)
+└── zminiz.zig         # dev tool: stdin -> stdout like miniz-3.1.2 (differential
+                       # harness for the native tdefl port)
 scripts/
 ├── gen_fixtures.py    # benchmark fixture generator
 ├── gen_edge.py        # FDICT / bad-FCHECK edge-case streams
 ├── diff_engine.py     # integrated engine vs 9 real zlib builds (1080 checks)
+├── diff_native_miniz.py   # native tdefl vs the miniz-3.1.2 wrapper (340 runs)
+├── diff_native_zlibng.py  # native zlib-ng vs the official 2.2.1 binary (110+ runs;
+│                          # --full adds the 450-case level x memLevel x strategy matrix)
 ├── bench_new.py       # convergence benchmark over fixtures/
 ├── bench_old.py       # naive-order comparison benchmark
 ├── stream_matrix.py   # streaming-API + full-depth one-shot differential

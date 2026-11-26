@@ -38,6 +38,8 @@ const profiles_mod = @import("profiles.zig");
 const ui = @import("ui.zig");
 const deflate = @import("deflate/deflate.zig");
 const zopfli_native = @import("zopfli/native.zig");
+const miniz_tdefl = @import("miniz/tdefl.zig");
+const zlibng = @import("zlibng/deflate.zig");
 
 pub const Stage = enum {
     hinted,
@@ -130,10 +132,22 @@ pub fn profileWanted(p: profiles_mod.Profile, external_zlib: bool) bool {
     return switch (p.impl_type) {
         .integrated => !external_zlib,
         .zopfli_native => !external_zlib,
+        .miniz_native => !external_zlib,
+        .zlibng_native => !external_zlib,
         .zopfli => external_zlib,
+        .miniz => external_zlib,
         .zlib_family => external_zlib or !p.covered_by_integrated,
         .legacy_zlib => external_zlib,
         else => true,
+    };
+}
+
+/// Whether the profile runs in-process in the current mode (no binary on
+/// disk needed).
+fn nativeInProcess(t: profiles_mod.ImplType) bool {
+    return switch (t) {
+        .integrated, .zopfli_native, .miniz_native, .zlibng_native => true,
+        else => false,
     };
 }
 
@@ -143,7 +157,7 @@ pub fn countAvailable(io: std.Io, binaries_dir: []const u8, external_zlib: bool)
     var n: usize = 0;
     for (profiles_mod.profiles) |p| {
         if (!profileWanted(p, external_zlib)) continue;
-        if (p.impl_type == .integrated or p.impl_type == .zopfli_native) {
+        if (nativeInProcess(p.impl_type)) {
             n += 1;
             continue;
         }
@@ -181,6 +195,11 @@ const Ctx = struct {
     compressor: ?deflate.Compressor = null,
     /// Scratch buffer for one compressed candidate (sized once).
     output_buf: ?[]u8 = null,
+    /// Lazily-initialized native miniz tdefl engine (in-process candidates).
+    miniz_compressor: ?miniz_tdefl.Compressor = null,
+    /// Lazily-initialized native zlib-ng engine (heap-allocated; the state
+    /// including the 64K hash table is several hundred KB).
+    zlibng_compressor: ?*zlibng.Compressor = null,
 
     fn ensureCompressor(self: *Ctx, uncompressed_len: usize) bool {
         if (self.compressor == null) {
@@ -198,6 +217,28 @@ const Ctx = struct {
         self.compressor = null;
         if (self.output_buf) |b| self.gpa.free(b);
         self.output_buf = null;
+        if (self.miniz_compressor) |*c| c.deinit();
+        self.miniz_compressor = null;
+        if (self.zlibng_compressor) |c| {
+            c.deinit();
+            self.gpa.destroy(c);
+        }
+        self.zlibng_compressor = null;
+    }
+
+    fn ensureZlibng(self: *Ctx) bool {
+        if (self.zlibng_compressor == null) {
+            const c = self.gpa.create(zlibng.Compressor) catch return false;
+            c.* = zlibng.Compressor.init(self.gpa);
+            self.zlibng_compressor = c;
+        }
+        return true;
+    }
+
+    fn ensureMiniz(self: *Ctx) bool {
+        if (self.miniz_compressor == null)
+            self.miniz_compressor = miniz_tdefl.Compressor.init(self.gpa);
+        return true;
     }
 };
 
@@ -226,12 +267,13 @@ fn predictedHeader(p: profiles_mod.Profile, c: Candidate) ?u16 {
     }
     return switch (p.impl_type) {
         // The integrated engine writes exactly the same container header as
-        // any stock zlib-family implementation (see deflate.pump).
-        .integrated, .zlib_family => hints.zlibContainerHeader(c.window_bits, c.level, c.strategy),
+        // any stock zlib-family implementation (see deflate.pump); so does
+        // zlib-ng's compat API (same FLEVEL formula, CINFO from w_bits).
+        .integrated, .zlib_family, .zlibng_native => hints.zlibContainerHeader(c.window_bits, c.level, c.strategy),
         .legacy_zlib => null,
         .zopfli, .zopfli_native => profiles_mod.zopfliHeaderOf(p),
         .libdeflate => if (c.level >= 1) hints.libdeflateHeader(@intCast(c.level)) else null,
-        .miniz => if (c.level >= 1) hints.minizHeader(@intCast(c.level)) else null,
+        .miniz, .miniz_native => if (c.level >= 1) hints.minizHeader(@intCast(c.level)) else null,
         .advdef => null,
     };
 }
@@ -295,6 +337,7 @@ fn effectivePrior(p: profiles_mod.Profile) u16 {
     };
     if (p.impl_type == .integrated) return 0;
     if (p.impl_type == .zopfli_native) return 39;
+    if (p.impl_type == .zlibng_native) return 37; // external zlib-ng's effective prior
     return @as(u16, p.prior) + 10;
 }
 
@@ -424,7 +467,7 @@ fn buildStage1(ctx: *Ctx, alloc: std.mem.Allocator) ![]Candidate {
     for (profiles_mod.profiles, 0..) |p, idx| {
         if (!ctx.available[idx]) continue;
         switch (p.impl_type) {
-            .integrated, .zlib_family, .legacy_zlib => {
+            .integrated, .zlib_family, .legacy_zlib, .zlibng_native => {
                 const wb = ctx.header.window_bits;
                 const is_legacy_abc = if (p.legacy_class) |cls|
                     (cls == .a or cls == .b or cls == .c)
@@ -490,7 +533,7 @@ fn buildStage1(ctx: *Ctx, alloc: std.mem.Allocator) ![]Candidate {
                     }, @intCast(i));
                 }
             },
-            .miniz => {
+            .miniz, .miniz_native => {
                 if (ctx.header.cinfo != 7) continue;
                 const levels: []const u32 = switch (ctx.header.flevel) {
                     0 => &.{1},
@@ -519,7 +562,7 @@ fn buildStage2(ctx: *Ctx, alloc: std.mem.Allocator) ![]Candidate {
     for (profiles_mod.profiles, 0..) |p, idx| {
         if (!ctx.available[idx]) continue;
         switch (p.impl_type) {
-            .integrated, .zlib_family, .legacy_zlib => {
+            .integrated, .zlib_family, .legacy_zlib, .zlibng_native => {
                 // With a canonical header, any parameter combination whose
                 // FLEVEL class differs would emit different FLG bytes.
                 if (!ctx.header.canonical()) continue;
@@ -671,7 +714,7 @@ fn buildStage2(ctx: *Ctx, alloc: std.mem.Allocator) ![]Candidate {
                     }, @intCast(l));
                 }
             },
-            .miniz => {
+            .miniz, .miniz_native => {
                 if (ctx.header.cinfo != 7) continue;
                 for (1..11) |l| {
                     try b.pushScored(.{
@@ -709,7 +752,8 @@ fn buildStage3(ctx: *Ctx, alloc: std.mem.Allocator) ![]Candidate {
 
     for (profiles_mod.profiles, 0..) |p, idx| {
         if (!ctx.available[idx]) continue;
-        if (p.impl_type != .zlib_family and p.impl_type != .integrated and p.impl_type != .legacy_zlib) continue;
+        if (p.impl_type != .zlib_family and p.impl_type != .integrated and p.impl_type != .legacy_zlib and
+            p.impl_type != .zlibng_native) continue;
 
         const legacy_class = p.legacy_class orelse profiles_mod.zlibClass(p);
         const is_legacy_abc = if (legacy_class) |cls|
@@ -1042,6 +1086,53 @@ fn runCandidateInner(ctx: *Ctx, c: Candidate, stage: Stage) ?Match {
             .version_range = profiles_mod.zopfliGroupRange(p) orelse "",
         };
     }
+    if (p.impl_type == .miniz_native) {
+        ctx.attempts += 1;
+        if (!ctx.ensureMiniz()) {
+            report(ctx, p, c, false);
+            return null;
+        }
+        const output = ctx.miniz_compressor.?.compressZlib(ctx.uncompressed, @intCast(@max(c.level, 1))) catch {
+            report(ctx, p, c, false);
+            return null;
+        };
+        defer ctx.gpa.free(output);
+        const matched = std.mem.eql(u8, output, ctx.compressed);
+        report(ctx, p, c, matched);
+        if (!matched) return null;
+        return .{
+            .profile = p, .stage = stage, .level = c.level,
+            .mem_level = c.mem_level, .strategy = c.strategy,
+            .window_bits = 15, .iterations = 0,
+            .attempts = ctx.attempts, .elapsed_ms = ctx.elapsed_ms,
+            .version_range = "miniz 3.1.2",
+        };
+    }
+
+    if (p.impl_type == .zlibng_native) {
+        ctx.attempts += 1;
+        if (!ctx.ensureZlibng()) {
+            report(ctx, p, c, false);
+            return null;
+        }
+        // windowBits fixed to 15: the reference wrapper accepts the argument
+        // but passes a literal 15 to deflateInit2.
+        const out = ctx.zlibng_compressor.?.compressZlib(ctx.uncompressed, c.level, c.mem_level, c.strategy, 15) catch {
+            report(ctx, p, c, false);
+            return null;
+        };
+        defer ctx.gpa.free(out);
+        const matched = std.mem.eql(u8, out, ctx.compressed);
+        report(ctx, p, c, matched);
+        if (!matched) return null;
+        return .{
+            .profile = p, .stage = stage, .level = c.level,
+            .mem_level = c.mem_level, .strategy = c.strategy,
+            .window_bits = 15, .iterations = 0,
+            .attempts = ctx.attempts, .elapsed_ms = ctx.elapsed_ms,
+            .version_range = "zlib-ng 2.2.1",
+        };
+    }
 
     ctx.attempts += 1;
 
@@ -1053,7 +1144,7 @@ fn runCandidateInner(ctx: *Ctx, c: Candidate, stage: Stage) ?Match {
 
     switch (p.impl_type) {
         // .integrated never reaches this path (handled above).
-        .integrated, .zopfli_native => unreachable,
+        .integrated, .zopfli_native, .miniz_native, .zlibng_native => unreachable,
         .zlib_family, .legacy_zlib => {
             argv_buf[1] = formatLevelArgs(&nb[0], c.level);
             argv_buf[2] = formatLevelArgs(&nb[1], c.mem_level);
@@ -1138,7 +1229,7 @@ fn report(ctx: *Ctx, p: profiles_mod.Profile, c: Candidate, matched: bool) void 
     const tag = ctx.stage.tag();
     const desc = switch (p.impl_type) {
         .integrated => unreachable,
-        .zlib_family, .legacy_zlib => std.fmt.bufPrint(&desc_buf, "{s} {s} | lvl={d} mem={d} strat={s} wBits={d}", .{
+        .zlib_family, .legacy_zlib, .zlibng_native => std.fmt.bufPrint(&desc_buf, "{s} {s} | lvl={d} mem={d} strat={s} wBits={d}", .{
             tag, p.name, c.level, c.mem_level,
             profiles_mod.STRATEGY_NAMES[@min(c.strategy, 4)], c.window_bits,
         }) catch "attempt",
@@ -1146,6 +1237,9 @@ fn report(ctx: *Ctx, p: profiles_mod.Profile, c: Candidate, matched: bool) void 
             tag, p.name, c.iterations,
         }) catch "attempt",
         .libdeflate, .miniz => std.fmt.bufPrint(&desc_buf, "{s} {s} | level={d}", .{
+            tag, p.name, c.level,
+        }) catch "attempt",
+        .miniz_native => std.fmt.bufPrint(&desc_buf, "{s} {s} | level={d}", .{
             tag, p.name, c.level,
         }) catch "attempt",
         .advdef => std.fmt.bufPrint(&desc_buf, "{s} {s} | level=-{d}", .{
@@ -1172,8 +1266,8 @@ pub fn findExactMatch(
         const path = try std.Io.Dir.path.join(gpa, &.{ opts.binaries_dir, p.binary });
         exe_paths[idx] = path;
         available[idx] = switch (p.impl_type) {
-            // The integrated engine needs no binary on disk.
-            .integrated, .zopfli_native => !opts.external_zlib,
+            // The integrated and in-process engines need no binary on disk.
+            .integrated, .zopfli_native, .miniz_native, .zlibng_native => !opts.external_zlib,
             else => blk: {
                 if (!profileWanted(p, opts.external_zlib)) break :blk false;
                 std.Io.Dir.cwd().access(io, path, .{}) catch break :blk false;

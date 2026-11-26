@@ -31,3 +31,10 @@ build-options-work/
 outputs/zopfli-references/
 *-journal.jsonl
 oneshot-ext-journal.jsonl
+
+# Re-downloadable vendor trees (build-binaries.sh fetches them on demand);
+# only the committed zopfli reference stays in the tree.
+binaries/vendor/zlib-ng-2.2.1*
+binaries/vendor/miniz-3.1.2*
+binaries/vendor/libdeflate-1.20*
+binaries/vendor/advancecomp-2.6*

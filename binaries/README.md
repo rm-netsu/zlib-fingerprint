@@ -38,3 +38,18 @@ gcc -O3 zlib_wrapper.c -lz -o zlib-1.2.8
 ```
 
 ```
+
+## Oracle notes (native ports)
+
+Since the native zlib-ng and miniz ports landed, their reference binaries
+in this directory are **differential oracles** for the in-process engines
+(`zig-out/bin/zzlibng`, `zig-out/bin/zminiz`):
+
+* `miniz-3.1.2` — self-contained (statically compiled amalgamation).
+* `zlib-ng-2.2.1` — links the vendor `libz.so`; built with
+  `-Wl,-rpath,.` from the vendor directory. Run it with
+  `LD_LIBRARY_PATH=binaries/vendor/zlib-ng-2.2.1` (the differential
+  scripts `scripts/diff_native_*.py` set this automatically).
+
+The wrapper `zlib_ng_wrapper.c` hardcodes windowBits=15 (its fourth
+argument is accepted but ignored); `zzlibng` mirrors this exactly.

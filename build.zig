@@ -33,6 +33,40 @@ pub fn build(b: *std.Build) void {
     }));
     b.installArtifact(zcompress);
 
+    // Development tool: compress stdin exactly like the miniz-3.1.2
+    // wrapper binary (differential harness for the native tdefl port).
+    const zminiz = b.addExecutable(.{
+        .name = "zminiz",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/zminiz.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    zminiz.root_module.addImport("miniz", b.createModule(.{
+        .root_source_file = b.path("src/miniz/tdefl.zig"),
+        .target = target,
+        .optimize = optimize,
+    }));
+    b.installArtifact(zminiz);
+
+    // Development tool: compress stdin exactly like the zlib-ng-2.2.1
+    // wrapper binary (differential harness for the native zlib-ng port).
+    const zzlibng = b.addExecutable(.{
+        .name = "zzlibng",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/zzlibng.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    zzlibng.root_module.addImport("zlibng", b.createModule(.{
+        .root_source_file = b.path("src/zlibng/deflate.zig"),
+        .target = target,
+        .optimize = optimize,
+    }));
+    b.installArtifact(zzlibng);
+
     const zlegacy = b.addExecutable(.{
         .name = "zlegacy",
         .root_module = b.createModule(.{

@@ -466,3 +466,69 @@ assumption - 1.2.3-and-earlier `Z_RLE` runs through
 `deflate_fast`/`deflate_slow` and is level-dependent; fixed in
 `src/fingerprint.zig`, stage 1 now probes level 1 and stage 2 sweeps
 levels 1-8 for strategy 3).
+
+
+## Native zlib-ng 2.2.1 (compat) and miniz 3.1.2 ports (2026-11-27)
+
+Two more external zlib-family implementations became native in-process
+engines of the fingerprint search. Both ports target the one-shot producer
+model of their reference wrappers and were verified byte-exactly against
+the official sources.
+
+### zlib-ng 2.2.1 (compat)
+
+* Scope: every strategy function of the default release build (QUICK and
+  MEDIUM strategies enabled) — `deflate_stored`, `deflate_quick`,
+  `deflate_fast`, `deflate_medium` (the zlib-ng-specific lazy algorithm
+  with `insert_match`/`fizzle_matches`), `deflate_slow`,
+  `deflate_rle`, `deflate_huff` — plus the shared machinery (integer and
+  rolling hash inserts, `fill_window`/high-water WIN_INIT, 64-bit `bi_buf`
+  output, trees.c including the `ct_data` union semantics, LIT_MEM symbol
+  buffers, `deflate_stored`'s direct-copy layout, the zlib header and MSB
+  Adler-32 trailer).
+* `windowBits` is fixed to 15 exactly like the reference wrapper (it
+  accepts the argument but passes a literal 15 to `deflateInit2`).
+* Deterministic-build assumption: the reference is the x86-64 little-endian
+  build (UNALIGNED_OK + UNALIGNED64_OK `longest_match` filter semantics);
+  the arch-dispatched AVX2/SSE2 kernels compute the same values as the
+  ported generic kernels — confirmed by the differential matrix.
+* Verification: 130 fixture runs (13 payloads x levels 0-9), the 450-case
+  `(level 0-9) x (memLevel 1,4,9) x (strategy 0-4)` parameter matrix and
+  60 randomized stress runs — **0 mismatches**; every compared stream
+  round-trips through zlib decompression (`scripts/diff_native_zlibng.py`).
+* Known details the port had to reproduce exactly (all found by the
+  differential harness): the `ct_data` union mapping (freq shares the
+  code slot, dad shares the len slot), the C's `int32_t bi_valid` that
+  `bi_windup` can drive negative, the GOTO_NEXT_CHAIN filter order (the
+  current candidate is checked before the chain advances), and
+  `emit_match`/`insert_match` taking the match struct by value.
+
+### miniz 3.1.2
+
+* Scope: the complete tdefl compressor in the **released** build
+  configuration — the release defaults
+  `MINIZ_USE_UNALIGNED_LOADS_AND_STORES` to 0 on every architecture, so
+  the reference wrappers compile the scalar variants only: byte-wise
+  `tdefl_find_match`, the plain `tdefl_compress_lz_codes`, and level 1
+  runs the greedy `tdefl_compress_normal` (`tdefl_compress_fast` is not
+  compiled at all in this configuration).
+* The `mz_compress2` one-shot model is preserved (mem_level validated but
+  ignored by tdefl, window bits 15, default strategy, compressBound+64
+  output buffer), as are the probe-table level mapping, the raw-block
+  fallback when a coded block would expand the data, the level-0
+  raw-block mode, and the FLEVEL computation by reversing the probe-table
+  lookup.
+* Verification: 340 runs (20 fixtures x levels 0-10 + 120 randomized
+  stress cases) — **0 mismatches**; every compared stream round-trips
+  (`scripts/diff_native_miniz.py`).
+
+### Remaining external implementations
+
+libdeflate 1.20 (levels 1-12 across four algorithms: fastest, greedy,
+lazy/lazy2 and near-optimal parsing plus block splitting and the optimal
+precode — roughly 3000 lines of intricately tie-broken C), AdvanceCOMP's
+vendored 7-zip deflate (advdef -3) and the advdef recomposition passes
+that depend on libdeflate-12 (-2, -4) remain external binaries: their
+streams are still fingerprinted through `binaries/libdeflate-1.20` and
+`binaries/advdef-2.6` when present, and honestly reported as no match
+otherwise.

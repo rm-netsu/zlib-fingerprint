@@ -18,6 +18,11 @@ jobs:
         run: zig build -Doptimize=ReleaseFast
       - name: Regression fixtures (engines + search)
         run: python3 scripts/regression_check.py --skip-official
+      - name: Native miniz + zlib-ng differentials (vs official wrappers)
+        run: |
+          bash binaries/build-binaries.sh || true
+          python3 scripts/diff_native_miniz.py --jobs $(nproc)
+          python3 scripts/diff_native_zlibng.py --jobs $(nproc)
 
   differential:
     runs-on: ubuntu-latest
