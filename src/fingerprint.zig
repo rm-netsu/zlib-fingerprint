@@ -124,7 +124,7 @@ pub fn level0Possible(compressed_len: usize, uncompressed_len: usize) bool {
 /// Whether the profile takes part in the search in the given mode.
 ///
 /// Default mode: the integrated engine covers every stock zlib release
-/// 1.2.3-1.3.2 (tested one-shot model), so those binaries are redundant.
+/// 1.2.3-1.4 (tested one-shot + streaming matrices), so those binaries are redundant.
 /// `--external-zlib` flips this: integrated engine off, all binaries on.
 pub fn profileWanted(p: profiles_mod.Profile, external_zlib: bool) bool {
     return switch (p.impl_type) {
@@ -245,9 +245,13 @@ test "legacy classes now carry the verified pre-1.2.1 header filter" {
     // level 0 -> FLEVEL 3 (78 da).
     try std.testing.expectEqual(@as(u16, 0x78DA), predictedHeader(class_c, .{ .profile = 3, .level = 0 }).?);
     // External class-D binary: modern formula, strategy-aware.
-    const class_d_external = profiles_mod.profiles[15];
+    var class_d_idx: usize = 0;
+    for (profiles_mod.profiles, 0..) |p, i| {
+        if (std.mem.eql(u8, p.name, "zlib 1.2.2")) class_d_idx = i;
+    }
+    const class_d_external = profiles_mod.profiles[class_d_idx];
     try std.testing.expectEqual(profiles_mod.ImplType.legacy_zlib, class_d_external.impl_type);
-    try std.testing.expectEqual(@as(u16, 0x7801), predictedHeader(class_d_external, .{ .profile = 15, .level = 6, .strategy = 2 }).?);
+    try std.testing.expectEqual(@as(u16, 0x7801), predictedHeader(class_d_external, .{ .profile = @intCast(class_d_idx), .level = 6, .strategy = 2 }).?);
     try std.testing.expect(!profileWanted(class_d_external, false));
     try std.testing.expect(profileWanted(class_d_external, true));
 }
@@ -329,7 +333,13 @@ const ZlibProbe = struct { level: i8, strategy: u8 };
 fn hintedZlibProbes(flevel: hints.Flevel, buf: []ZlibProbe) []ZlibProbe {
     return switch (flevel) {
         // FLEVEL=0: level 0..1 (default/filtered strategy) or any level
-        // with HUFFMAN_ONLY / RLE / FIXED (level-independent outputs).
+        // with HUFFMAN_ONLY / RLE / FIXED. HUFFMAN_ONLY output is
+        // level-independent in every era (verified: levels 1/4/9 emit
+        // identical bytes on text, random, repeat and periodic corpora);
+        // RLE is level-independent only from 1.2.4 — the 1.2.3-and-earlier
+        // engine runs it through deflate_fast/deflate_slow, so the level-1
+        // fast-path twin is probed as well; FIXED goes through
+        // deflate_slow and is level-dependent (stage 2 sweeps it).
         0 => blk: {
             var n: usize = 0;
             buf[n] = .{ .level = 1, .strategy = 0 };
@@ -339,6 +349,8 @@ fn hintedZlibProbes(flevel: hints.Flevel, buf: []ZlibProbe) []ZlibProbe {
             buf[n] = .{ .level = 9, .strategy = 2 };
             n += 1;
             buf[n] = .{ .level = 9, .strategy = 3 };
+            n += 1;
+            buf[n] = .{ .level = 1, .strategy = 3 };
             n += 1;
             buf[n] = .{ .level = 9, .strategy = 4 };
             n += 1;
@@ -567,14 +579,23 @@ fn buildStage2(ctx: *Ctx, alloc: std.mem.Allocator) ![]Candidate {
                         }
                     }
                 } else {
-                    // Z_HUFFMAN_ONLY (2) and Z_RLE (3) have no hash chains,
-                    // so the level does not matter — but lit_bufsize
-                    // (memLevel) shifts the block flush timing, so every
-                    // memLevel is a distinct output. One level (9) sweep per
-                    // strategy; the header-prediction filter drops these for
-                    // FLEVEL != 0 (strategies >= 2 always write FLEVEL=0).
-                    // Z_FIXED does not exist before 1.2.3, so class D
-                    // only gets strategies 2 and 3 here.
+                    // Z_HUFFMAN_ONLY (2) has no match search, so the level
+                    // does not matter — but lit_bufsize (memLevel) shifts
+                    // the block flush timing, so every memLevel is a
+                    // distinct output. One level (9) sweep per strategy.
+                    // Z_RLE (3) is level-independent only from 1.2.4
+                    // (dedicated deflate_rle); classes D/E implement it
+                    // through deflate_fast/deflate_slow with
+                    // longest_match_fast, whose search parameters come from
+                    // the level's configuration entry — the fast
+                    // (levels 1-3) and slow (4-9) families emit different
+                    // streams (witness: 65535 repeated bytes, level 1 ->
+                    // 150 bytes, level 4+ -> 85). Strategy 3 therefore
+                    // sweeps every level, level 9 first so uniform streams
+                    // keep converging early. The header-prediction filter
+                    // drops these for FLEVEL != 0 (strategies >= 2 always
+                    // write FLEVEL=0). Z_FIXED does not exist before 1.2.3,
+                    // so class D only gets strategies 2 and 3 here.
                     for ([_]u8{ 2, 3 }, 0..) |strat, srank| {
                         for (mems, 0..) |mem, mrank| {
                             try b.pushScored(.{
@@ -584,6 +605,21 @@ fn buildStage2(ctx: *Ctx, alloc: std.mem.Allocator) ![]Candidate {
                                 .strategy = strat,
                                 .window_bits = wb,
                             }, 1000 + srank * 100 + mrank);
+                        }
+                    }
+                    const strat3_levels: []const i8 = switch (ctx.header.flevel) {
+                        0 => &.{ 1, 2, 3, 4, 5, 6, 7, 8 },
+                        else => &.{},
+                    };
+                    for (strat3_levels, 0..) |level, lrank| {
+                        for (mems, 0..) |mem, mrank| {
+                            try b.pushScored(.{
+                                .profile = @intCast(idx),
+                                .level = level,
+                                .mem_level = mem,
+                                .strategy = 3,
+                                .window_bits = wb,
+                            }, 1000 + 3 * 100 + lrank * 2 + mrank);
                         }
                     }
                     // Z_FIXED goes through deflate_slow and is
@@ -777,7 +813,7 @@ fn runChild(ctx: *Ctx, argv: []const []const u8) ![]u8 {
 }
 
 // ---------------------------------------------------------------------------
-// Integrated engine (in-process zlib 1.2.3-1.3.2) execution
+// Integrated engine (in-process zlib 1.2.3-1.4) execution
 // ---------------------------------------------------------------------------
 
 /// One output-equivalence-class representative of the integrated engine.
@@ -804,22 +840,22 @@ fn collapseGroups(level: i32, strategy: u8) []const CollapseGroup {
                 .{ .variant = .z1_2_3, .range = "zlib 1.2.3" },
                 .{ .variant = .z1_2_4_to_1_2_8, .range = "zlib 1.2.4-1.2.8" },
                 .{ .variant = .z1_2_9, .range = "zlib 1.2.9" },
-                .{ .variant = .z1_2_10_plus, .range = "zlib 1.2.10-1.3.2" },
+                .{ .variant = .z1_2_10_plus, .range = "zlib 1.2.10-1.4" },
             },
             else => &[_]CollapseGroup{
                 .{ .variant = .z1_2_4_to_1_2_8, .range = "zlib 1.2.3-1.2.8" },
                 .{ .variant = .z1_2_9, .range = "zlib 1.2.9" },
-                .{ .variant = .z1_2_10_plus, .range = "zlib 1.2.10-1.3.2" },
+                .{ .variant = .z1_2_10_plus, .range = "zlib 1.2.10-1.4" },
             },
         };
     }
     return switch (strategy) {
         2, 3 => &[_]CollapseGroup{
-            .{ .variant = .z1_2_4_to_1_2_8, .range = "zlib 1.2.4-1.3.2" },
+            .{ .variant = .z1_2_4_to_1_2_8, .range = "zlib 1.2.4-1.4" },
             .{ .variant = .z1_2_3, .range = "zlib 1.2.3" },
         },
         else => &[_]CollapseGroup{
-            .{ .variant = .z1_2_4_to_1_2_8, .range = "zlib 1.2.3-1.3.2" },
+            .{ .variant = .z1_2_4_to_1_2_8, .range = "zlib 1.2.3-1.4" },
         },
     };
 }
@@ -962,7 +998,7 @@ fn refineRange(ctx: *Ctx, group: CollapseGroup, c: Candidate) []const u8 {
                 // Level 0: the legacy stored layout may coincide with the
                 // newer generations on this particular payload.
                 if (compressIntegrated(ctx, .z1_2_9, c)) {
-                    if (compressIntegrated(ctx, .z1_2_10_plus, c)) return "zlib 1.2.3-1.3.2";
+                    if (compressIntegrated(ctx, .z1_2_10_plus, c)) return "zlib 1.2.3-1.4";
                     return "zlib 1.2.3-1.2.9";
                 }
                 return group.range;
@@ -971,11 +1007,11 @@ fn refineRange(ctx: *Ctx, group: CollapseGroup, c: Candidate) []const u8 {
             // the divergence needs the fill_window/block-flush timings to
             // drift apart.
             if (c.strategy != 2 and c.strategy != 3) return group.range;
-            if (compressIntegrated(ctx, .z1_2_3, c)) return "zlib 1.2.3-1.3.2";
+            if (compressIntegrated(ctx, .z1_2_3, c)) return "zlib 1.2.3-1.4";
             return group.range;
         },
         .z1_2_9 => {
-            if (compressIntegrated(ctx, .z1_2_10_plus, c)) return "zlib 1.2.9-1.3.2";
+            if (compressIntegrated(ctx, .z1_2_10_plus, c)) return "zlib 1.2.9-1.4";
             return group.range;
         },
         else => return group.range,
@@ -1511,13 +1547,13 @@ test "collapseGroups minimizes representatives per parameter combination" {
     {
         const groups = collapseGroups(6, 0);
         try testing.expectEqual(@as(usize, 1), groups.len);
-        try testing.expectEqualStrings("zlib 1.2.3-1.3.2", groups[0].range);
+        try testing.expectEqualStrings("zlib 1.2.3-1.4", groups[0].range);
     }
     // Z_HUFFMAN_ONLY / Z_RLE split off the 1.2.3 block states.
     {
         const groups = collapseGroups(6, 2);
         try testing.expectEqual(@as(usize, 2), groups.len);
-        try testing.expectEqualStrings("zlib 1.2.4-1.3.2", groups[0].range);
+        try testing.expectEqualStrings("zlib 1.2.4-1.4", groups[0].range);
         try testing.expectEqualStrings("zlib 1.2.3", groups[1].range);
     }
     // Level 0: three stored-block generations (1.2.3 and 1.2.4-1.2.8 share
@@ -1527,7 +1563,7 @@ test "collapseGroups minimizes representatives per parameter combination" {
         try testing.expectEqual(@as(usize, 3), groups.len);
         try testing.expectEqualStrings("zlib 1.2.3-1.2.8", groups[0].range);
         try testing.expectEqualStrings("zlib 1.2.9", groups[1].range);
-        try testing.expectEqualStrings("zlib 1.2.10-1.3.2", groups[2].range);
+        try testing.expectEqualStrings("zlib 1.2.10-1.4", groups[2].range);
     }
     // Level 0 with huff/rle: 1.2.3 stays stored, 1.2.4+ dispatch huff/rle.
     {
@@ -1566,7 +1602,7 @@ test "integrated engine reproduces its own default stream on the first attempt" 
     try testing.expect(m.profile.impl_type == .integrated);
     try testing.expectEqual(Stage.hinted, m.stage);
     try testing.expectEqual(@as(usize, 1), m.attempts);
-    try testing.expectEqualStrings("zlib 1.2.3-1.3.2", m.version_range);
+    try testing.expectEqualStrings("zlib 1.2.3-1.4", m.version_range);
 }
 
 test "integrated engine distinguishes zlib 1.2.3 on Z_HUFFMAN_ONLY" {

@@ -89,6 +89,7 @@ pub const Version = enum {
     v1_3_0,
     v1_3_1,
     v1_3_2,
+    v1_4,
 
     /// "1.2.3" style display name.
     pub fn name(self: Version) []const u8 {
@@ -111,6 +112,7 @@ pub const Version = enum {
             .v1_3_0 => "1.3",
             .v1_3_1 => "1.3.1",
             .v1_3_2 => "1.3.2",
+            .v1_4 => "1.4",
         };
     }
 
@@ -122,6 +124,7 @@ pub const Version = enum {
 pub const all_versions = [_]Version{
     .v1_0_5,  .v1_0_9,  .v1_2_0,  .v1_2_2,  .v1_2_3,  .v1_2_4,  .v1_2_5,  .v1_2_6,  .v1_2_7,
     .v1_2_8,  .v1_2_9,  .v1_2_10, .v1_2_11, .v1_2_12, .v1_2_13, .v1_3_0, .v1_3_1, .v1_3_2,
+    .v1_4,
 };
 
 /// The distinct compressed-output behaviors ("implementation variants").
@@ -174,13 +177,13 @@ pub const Variant = enum {
     /// Human-readable version coverage of the variant.
     pub fn rangeName(self: Variant) []const u8 {
         return switch (self) {
-            .z1_0_5 => "zlib 1.0.1-1.0.5",
+            .z1_0_5 => "zlib 0.99-1.0.5",
             .z1_0_9 => "zlib 1.0.6-1.0.9",
             .z1_2_0 => "zlib 1.1.0-1.2.0",
             .z1_2_3 => "zlib 1.2.3",
             .z1_2_4_to_1_2_8 => "zlib 1.2.4-1.2.8",
             .z1_2_9 => "zlib 1.2.9",
-            .z1_2_10_plus => "zlib 1.2.10-1.3.2",
+            .z1_2_10_plus => "zlib 1.2.10-1.4",
         };
     }
 

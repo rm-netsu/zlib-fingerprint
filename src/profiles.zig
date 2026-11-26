@@ -102,7 +102,7 @@ pub fn zlibClass(p: Profile) ?ZlibClass {
         &.{ "zlib-1.2.3" },
         &.{ "zlib-1.2.4", "zlib-1.2.5", "zlib-1.2.6", "zlib-1.2.7", "zlib-1.2.8" },
         &.{ "zlib-1.2.9" },
-        &.{ "zlib-1.2.10", "zlib-1.2.11", "zlib-1.2.12", "zlib-1.2.13", "zlib-1.3", "zlib-1.3.1", "zlib-1.3.2" },
+        &.{ "zlib-1.2.10", "zlib-1.2.11", "zlib-1.2.12", "zlib-1.2.13", "zlib-1.3", "zlib-1.3.1", "zlib-1.3.2", "zlib-1.4" },
     };
     for (members, 0..) |versions, index| {
         for (versions) |version| {
@@ -114,14 +114,21 @@ pub fn zlibClass(p: Profile) ?ZlibClass {
 
 pub fn classRange(class: ZlibClass) []const u8 {
     return switch (class) {
-        .a => "zlib 1.0.1-1.0.5 (available releases)",
+        // 0.99 is byte-identical to class A across the 1,600-case common
+        // parameter matrix (see EQUIVALENCE.md); 0.95 emits the same bytes
+        // wherever its smaller API succeeds (no level 0, no deflateParams/
+        // SetDictionary/Reset, stubbed deflateCopy).
+        .a => "zlib 0.99-1.0.5",
         .b => "zlib 1.0.6-1.0.9",
         .c => "zlib 1.1.0-1.2.0",
         .d => "zlib 1.2.1-1.2.2",
         .e => "zlib 1.2.3",
         .f => "zlib 1.2.4-1.2.8",
         .g => "zlib 1.2.9",
-        .h => "zlib 1.2.10-1.3.2 (tested one-shot matrix)",
+        // zlib 1.4 (Nov 2026) is byte-identical to 1.3.2 across the full
+        // one-shot matrix, the streaming matrix and Z_BLOCK/deflateParams
+        // scenarios (see EQUIVALENCE.md).
+        .h => "zlib 1.2.10-1.4",
     };
 }
 
@@ -137,6 +144,7 @@ pub const profiles = [_]Profile{
     .{ .name = "zlib class C (integrated)", .binary = "(legacy-c)", .impl_type = .integrated, .prior = 0, .legacy_class = .c },
     .{ .name = "zlib class B (integrated)", .binary = "(legacy-b)", .impl_type = .integrated, .prior = 0, .legacy_class = .b },
     .{ .name = "zlib class A (integrated)", .binary = "(legacy-a)", .impl_type = .integrated, .prior = 0, .legacy_class = .a },
+    .{ .name = "zlib 1.4",          .binary = "zlib-1.4",           .impl_type = .zlib_family, .prior = 0, .covered_by_integrated = true },
     .{ .name = "zlib 1.3.2",        .binary = "zlib-1.3.2",         .impl_type = .zlib_family, .prior = 1, .covered_by_integrated = true },
     .{ .name = "zlib 1.3.1",        .binary = "zlib-1.3.1",         .impl_type = .zlib_family, .prior = 2,  .covered_by_integrated = true },
     .{ .name = "zlib 1.2.11",       .binary = "zlib-1.2.11",        .impl_type = .zlib_family, .prior = 3,  .covered_by_integrated = true },
@@ -226,12 +234,14 @@ test "integrated coverage flags match the engine's verified range" {
         switch (p.impl_type) {
             .integrated => try std.testing.expect(!p.covered_by_integrated),
             .zlib_family, .legacy_zlib => {
-                // Every listed stock zlib release from 1.2.3 through 1.3.2 is covered;
-                // 1.3.2 is covered for the verified one-shot producer model;
-                // streaming-mode validation remains on the backlog.
+                // Every listed stock zlib release from 1.2.3 through 1.4 is
+                // covered; 1.3.2/1.4 are covered for the verified one-shot
+                // producer model plus the 710-scenario streaming matrix
+                // (see EQUIVALENCE.md).
                 const covered_versions = [_][]const u8{
                     "zlib 1.2.3", "zlib 1.2.5", "zlib 1.2.7", "zlib 1.2.8",
                     "zlib 1.2.11", "zlib 1.2.12", "zlib 1.2.13", "zlib 1.3", "zlib 1.3.1", "zlib 1.3.2",
+                    "zlib 1.4",
                 };
                 var should_cover = false;
                 for (covered_versions) |v| {
@@ -260,6 +270,6 @@ test "class registry agrees with tested release coverage" {
     for (profiles) |p| {
         if (zlibClass(p)) |group| counts[@intFromEnum(group)] += 1;
     }
-    try std.testing.expectEqualSlices(usize, &.{ 5, 5, 7, 3, 1, 3, 0, 6 }, &counts);
+    try std.testing.expectEqualSlices(usize, &.{ 5, 5, 7, 3, 1, 3, 0, 7 }, &counts);
     try std.testing.expect(zlibClass(profiles[0]) == null);
 }

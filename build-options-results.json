@@ -1,0 +1,34 @@
+{
+  "tool": "scripts/build_options_check.py",
+  "date": "2026-11-26",
+  "versions": [
+    "1.1.4",
+    "1.2.3",
+    "1.2.11"
+  ],
+  "variants": {
+    "O0": [
+      "-O0"
+    ],
+    "O3": [
+      "-O3"
+    ],
+    "unaligned": [
+      "-O3",
+      "-DUNALIGNED_OK"
+    ],
+    "debug": [
+      "-O2",
+      "-DDEBUG"
+    ],
+    "fastest": [
+      "-O3",
+      "-DFASTEST"
+    ]
+  },
+  "case_count": 180,
+  "elapsed_seconds": 18.8,
+  "unexpected_mismatches": [],
+  "fastest_mismatches": 12,
+  "note": "-O0/-O3/UNALIGNED_OK/DEBUG must be byte-identical to the default build; FASTEST (since 1.1.0) legitimately changes the output (forces level 1, no hash chains). x86-64 only; ARM64 cross-runs were not executed in this environment."
+}

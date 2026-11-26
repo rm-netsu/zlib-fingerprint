@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v1
+        with:
+          version: '0.16.0'
+      - name: Unit tests
+        run: zig build test
+      - name: Release build
+        run: zig build -Doptimize=ReleaseFast
+      - name: Regression fixtures (engines + search)
+        run: python3 scripts/regression_check.py --skip-official
+
+  differential:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v1
+        with:
+          version: '0.16.0'
+      - name: Build native tools
+        run: zig build -Doptimize=ReleaseFast
+      - name: Build official zlib release wrappers (30 + 1 releases)
+        run: ZLIB_ONLY=1 bash binaries/build-binaries.sh
+      - name: Regression fixtures (incl. official wrappers)
+        run: python3 scripts/regression_check.py
+      - name: Streaming-API differential matrix
+        run: python3 scripts/stream_matrix.py stream --jobs $(nproc)
+      - name: Extended one-shot differential matrix
+        run: python3 scripts/stream_matrix.py oneshot --jobs $(nproc)
+      - name: Archive results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: differential-results
+          path: |
+            stream-matrix.json
+            oneshot-ext-results.json

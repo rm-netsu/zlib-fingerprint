@@ -1,0 +1,397 @@
+{
+  "tool": "scripts/asan_unstable.py",
+  "date": "2026-11-26",
+  "flags": [
+    "-fsanitize=address,undefined",
+    "-fno-sanitize-recover=all",
+    "-fno-omit-frame-pointer",
+    "-g",
+    "-O1"
+  ],
+  "payload": "131072 bytes of repeated English sentence",
+  "results": [
+    {
+      "case": "A level0 mem1",
+      "version": "1.0.5",
+      "params": [
+        0,
+        1,
+        0,
+        15
+      ],
+      "expectation": "pending-buffer overrun of class A deflate_stored",
+      "exit": 1,
+      "output_len": 0,
+      "sanitizer": "==2953==ERROR: AddressSanitizer: heap-buffer-overflow on address 0x515000000500 at pc 0x559ffd4a761f bp 0x7ffc5c87d0e0 sp 0x7ffc5c87d0d8 | SUMMARY: AddressSanitizer: heap-buffer-overflow /home/z/my-project/zlib-fingerprint/asan-work/zlib-1.0.5/trees.c:1139 in copy_block"
+    },
+    {
+      "case": "A level0 mem4",
+      "version": "1.0.5",
+      "params": [
+        0,
+        4,
+        0,
+        15
+      ],
+      "expectation": "pending-buffer overrun of class A deflate_stored",
+      "exit": 1,
+      "output_len": 0,
+      "sanitizer": "==2954==ERROR: AddressSanitizer: heap-buffer-overflow on address 0x521000003900 at pc 0x557c0921761f bp 0x7ffda4272140 sp 0x7ffda4272138 | SUMMARY: AddressSanitizer: heap-buffer-overflow /home/z/my-project/zlib-fingerprint/asan-work/zlib-1.0.5/trees.c:1139 in copy_block"
+    },
+    {
+      "case": "A level0 mem7",
+      "version": "1.0.5",
+      "params": [
+        0,
+        7,
+        0,
+        15
+      ],
+      "expectation": "pending-buffer overrun of class A deflate_stored",
+      "exit": 1,
+      "output_len": 0,
+      "sanitizer": "==2955==ERROR: AddressSanitizer: heap-buffer-overflow on address 0x52d000012400 at pc 0x5570f55ad61f bp 0x7fffb78ce010 sp 0x7fffb78ce008 | SUMMARY: AddressSanitizer: heap-buffer-overflow /home/z/my-project/zlib-fingerprint/asan-work/zlib-1.0.5/trees.c:1139 in copy_block"
+    },
+    {
+      "case": "F level0 strat2",
+      "version": "1.2.4",
+      "params": [
+        0,
+        8,
+        2,
+        15
+      ],
+      "expectation": "pending-buffer overrun in _tr_flush_block",
+      "exit": 0,
+      "output_len": 131123,
+      "sanitizer": ""
+    },
+    {
+      "case": "F-late level0 strat2",
+      "version": "1.2.8",
+      "params": [
+        0,
+        8,
+        2,
+        15
+      ],
+      "expectation": "same code path in 1.2.8",
+      "exit": 0,
+      "output_len": 131123,
+      "sanitizer": ""
+    },
+    {
+      "case": "F level0 strat3",
+      "version": "1.2.4",
+      "params": [
+        0,
+        8,
+        3,
+        15
+      ],
+      "expectation": "pending-buffer overrun in _tr_flush_block",
+      "exit": 0,
+      "output_len": 131123,
+      "sanitizer": ""
+    },
+    {
+      "case": "F-late level0 strat3",
+      "version": "1.2.8",
+      "params": [
+        0,
+        8,
+        3,
+        15
+      ],
+      "expectation": "same code path in 1.2.8",
+      "exit": 0,
+      "output_len": 131123,
+      "sanitizer": ""
+    },
+    {
+      "case": "A wbits8 level1",
+      "version": "1.0.5",
+      "params": [
+        1,
+        8,
+        0,
+        8
+      ],
+      "expectation": "wrapped MAX_DIST out-of-bounds reads",
+      "exit": 1,
+      "output_len": 0,
+      "sanitizer": "==2964==ERROR: AddressSanitizer: SEGV on unknown address 0x515100000180 (pc 0x7f23e76fa8c3 bp 0x7ffe9632c820 sp 0x7ffe9632c788 T0) | SUMMARY: AddressSanitizer: SEGV (/lib/x86_64-linux-gnu/libc.so.6+0x17b8c3) (BuildId: 5e5b51f4c39af9ac589408c1dc432ba390a273cc) "
+    },
+    {
+      "case": "A wbits8 level6",
+      "version": "1.0.5",
+      "params": [
+        6,
+        8,
+        0,
+        8
+      ],
+      "expectation": "wrapped MAX_DIST out-of-bounds reads",
+      "exit": 1,
+      "output_len": 0,
+      "sanitizer": "==2965==ERROR: AddressSanitizer: SEGV on unknown address 0x515100000180 (pc 0x7fbff27108c3 bp 0x7ffecd627c70 sp 0x7ffecd627bd8 T0) | SUMMARY: AddressSanitizer: SEGV (/lib/x86_64-linux-gnu/libc.so.6+0x17b8c3) (BuildId: 5e5b51f4c39af9ac589408c1dc432ba390a273cc) "
+    },
+    {
+      "case": "B wbits8 level1",
+      "version": "1.0.9",
+      "params": [
+        1,
+        8,
+        0,
+        8
+      ],
+      "expectation": "wrapped MAX_DIST out-of-bounds reads",
+      "exit": 1,
+      "output_len": 0,
+      "sanitizer": "==2966==ERROR: AddressSanitizer: SEGV on unknown address 0x515100000180 (pc 0x7f3c798b08c3 bp 0x7ffeb50fb3b0 sp 0x7ffeb50fb318 T0) | SUMMARY: AddressSanitizer: SEGV (/lib/x86_64-linux-gnu/libc.so.6+0x17b8c3) (BuildId: 5e5b51f4c39af9ac589408c1dc432ba390a273cc) "
+    },
+    {
+      "case": "B wbits8 level6",
+      "version": "1.0.9",
+      "params": [
+        6,
+        8,
+        0,
+        8
+      ],
+      "expectation": "wrapped MAX_DIST out-of-bounds reads",
+      "exit": 1,
+      "output_len": 0,
+      "sanitizer": "==2967==ERROR: AddressSanitizer: SEGV on unknown address 0x515100000180 (pc 0x7f04dd5bb8c3 bp 0x7ffea1c2f350 sp 0x7ffea1c2f2b8 T0) | SUMMARY: AddressSanitizer: SEGV (/lib/x86_64-linux-gnu/libc.so.6+0x17b8c3) (BuildId: 5e5b51f4c39af9ac589408c1dc432ba390a273cc) "
+    },
+    {
+      "case": "C wbits8 level1 (rejected)",
+      "version": "1.2.0",
+      "params": [
+        1,
+        8,
+        0,
+        8
+      ],
+      "expectation": "windowBits 8 rejected at init (control)",
+      "exit": 2,
+      "output_len": 0,
+      "sanitizer": ""
+    },
+    {
+      "case": "D wbits8 level1 (rejected)",
+      "version": "1.2.2",
+      "params": [
+        1,
+        8,
+        0,
+        8
+      ],
+      "expectation": "windowBits 8 rejected at init (control)",
+      "exit": 0,
+      "output_len": 11797,
+      "sanitizer": ""
+    },
+    {
+      "case": "control level6",
+      "version": "1.0.5",
+      "params": [
+        6,
+        8,
+        0,
+        15
+      ],
+      "expectation": "clean path control (must not report)",
+      "exit": 0,
+      "output_len": 449,
+      "sanitizer": ""
+    },
+    {
+      "case": "control level6",
+      "version": "1.0.9",
+      "params": [
+        6,
+        8,
+        0,
+        15
+      ],
+      "expectation": "clean path control (must not report)",
+      "exit": 0,
+      "output_len": 449,
+      "sanitizer": ""
+    },
+    {
+      "case": "control level6",
+      "version": "1.2.0",
+      "params": [
+        6,
+        8,
+        0,
+        15
+      ],
+      "expectation": "clean path control (must not report)",
+      "exit": 0,
+      "output_len": 449,
+      "sanitizer": ""
+    },
+    {
+      "case": "control level6",
+      "version": "1.2.2",
+      "params": [
+        6,
+        8,
+        0,
+        15
+      ],
+      "expectation": "clean path control (must not report)",
+      "exit": 0,
+      "output_len": 449,
+      "sanitizer": ""
+    },
+    {
+      "case": "control level6",
+      "version": "1.2.4",
+      "params": [
+        6,
+        8,
+        0,
+        15
+      ],
+      "expectation": "clean path control (must not report)",
+      "exit": 0,
+      "output_len": 449,
+      "sanitizer": ""
+    },
+    {
+      "case": "control level6",
+      "version": "1.2.8",
+      "params": [
+        6,
+        8,
+        0,
+        15
+      ],
+      "expectation": "clean path control (must not report)",
+      "exit": 0,
+      "output_len": 449,
+      "sanitizer": ""
+    },
+    {
+      "case": "control level6",
+      "version": "1.2.9",
+      "params": [
+        6,
+        8,
+        0,
+        15
+      ],
+      "expectation": "clean path control (must not report)",
+      "exit": 0,
+      "output_len": 449,
+      "sanitizer": ""
+    },
+    {
+      "case": "control level6",
+      "version": "1.2.11",
+      "params": [
+        6,
+        8,
+        0,
+        15
+      ],
+      "expectation": "clean path control (must not report)",
+      "exit": 0,
+      "output_len": 449,
+      "sanitizer": ""
+    },
+    {
+      "case": "control level0",
+      "version": "1.2.11",
+      "params": [
+        0,
+        8,
+        0,
+        15
+      ],
+      "expectation": "clean stored path control (must not report)",
+      "exit": 1,
+      "output_len": 0,
+      "sanitizer": "trees.c:873:5: runtime error: null pointer passed as argument 2, which is declared to never be null"
+    },
+    {
+      "case": "control level0 mem1",
+      "version": "1.0.9",
+      "params": [
+        0,
+        1,
+        0,
+        15
+      ],
+      "expectation": "class B stored with small memLevel (must not report)",
+      "exit": 0,
+      "output_len": 132373,
+      "sanitizer": ""
+    },
+    {
+      "case": "A params 9->0 mem1",
+      "version": "1.0.5",
+      "args": [
+        "params",
+        "9",
+        "1",
+        "0",
+        "15",
+        "0",
+        "0",
+        "65536",
+        "0",
+        "0"
+      ],
+      "expectation": "deflateParams(level 0) mid-stream crashes class A with memLevel 1",
+      "exit": 1,
+      "output_len": 0,
+      "sanitizer": "==2991==ERROR: AddressSanitizer: heap-buffer-overflow on address 0x515000000500 at pc 0x559f5fa7351f bp 0x7ffc4b442b50 sp 0x7ffc4b442b48 | SUMMARY: AddressSanitizer: heap-buffer-overflow /home/z/my-project/zlib-fingerprint/asan-work/zlib-1.0.5/trees.c:1139 in copy_block"
+    },
+    {
+      "case": "A params 9->0 mem8",
+      "version": "1.0.5",
+      "args": [
+        "params",
+        "9",
+        "8",
+        "0",
+        "15",
+        "0",
+        "0",
+        "65536",
+        "0",
+        "0"
+      ],
+      "expectation": "same switch at memLevel 8",
+      "exit": 0,
+      "output_len": 65810,
+      "sanitizer": ""
+    },
+    {
+      "case": "B params 9->0 mem1 control",
+      "version": "1.0.9",
+      "args": [
+        "params",
+        "9",
+        "1",
+        "0",
+        "15",
+        "0",
+        "0",
+        "65536",
+        "0",
+        "0"
+      ],
+      "expectation": "class B survives the same switch (must not report)",
+      "exit": 0,
+      "output_len": 66472,
+      "sanitizer": ""
+    }
+  ],
+  "elapsed_seconds": 36.6
+}

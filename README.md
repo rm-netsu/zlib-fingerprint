@@ -1,9 +1,10 @@
 # zlib-fingerprint
 
 **Historical release equivalence audit:** see [EQUIVALENCE.md](EQUIVALENCE.md)
-for the 30-version, 306,000-invocation differential experiment, including
-new pre-1.2.3 classes, the 1.3.2 check, and the output-buffer-dependent
-1.2.9/1.2.10 distinction.
+for the 31-release, 580,000+-invocation differential experiment (one-shot
+and streaming), including the pre-1.2.3 classes, the 1.3.2/1.4 checks,
+the output-buffer-dependent 1.2.9/1.2.10 distinction, the 1.1.0 split
+and the pre-1.0 (0.95/0.99) research.
 
 Identify the compressor implementation, version and parameter set that
 produced a zlib (RFC 1950) stream — by bit-exact brute force.
@@ -211,8 +212,11 @@ across the entire range and lives in shared modules only.
 ### Output-equivalence classes
 
 ```text
-{ 1.0.1-1.0.5 }  { 1.0.6-1.0.9 }  { 1.1.0-1.2.0 }  { 1.2.3 }  { 1.2.4-1.2.8 }  { 1.2.9 }  { 1.2.10-1.3.2 }
+{ 0.99, 1.0.1-1.0.5 }  { 1.0.6-1.0.9 }  { 1.1.0 }*  { 1.1.1-1.2.0 }  { 1.2.3 }  { 1.2.4-1.2.8 }  { 1.2.9 }  { 1.2.10-1.4 }
 ```
+
+*1.1.0 diverges from 1.1.1+ only on >= 512 KiB mixed inputs at level >= 4
+(one surviving heuristic call site); everything else is byte-identical.
 
 The search tries the minimal set of representatives per parameter
 combination (`collapseGroups`): one for most combinations, two for
@@ -234,20 +238,22 @@ size, so the level-0 path drains the output in a single call. Levels
 ### Known divergence from real zlib (documented UB)
 
 Running `deflate_huff`/`deflate_rle` **at level 0** with zlib 1.2.4-1.2.8
-triggers `_tr_flush_block`'s `level == 0 -> force a stored block` branch
-far beyond zlib's own pending buffer. Genuine zlib 1.2.4-1.2.8
-heap-overflows there and emits a corrupted stream (verified with
-AddressSanitizer against the unmodified C sources). The search visits
-that path only in the stage-3 sweep, and this port models the idealized
+follows a code path the later releases restructured; the earlier session
+verified a pending-buffer overrun with AddressSanitizer against the
+unmodified C sources under those conditions, while the 2026-11-26
+`asan_unstable.py` sweep (one-shot and avail_out 1-4096, text/random
+payloads, memLevel 1/4/8, windowBits 8/15) could not retrigger it - see
+EQUIVALENCE.md for the exact scope of both runs. The search visits that
+path only in the stage-3 sweep, and this port models the idealized
 (valid) stream the code path would produce.
 
 ## Supported implementations
 
 | Profile | Type | Parameters |
 |---------|------|------------|
-| zlib (integrated), 1.2.3 – 1.3.2 | in-process | full `level memLevel strategy windowBits` matrix; 1.3.2 covered in tested one-shot model |
+| zlib (integrated), 1.2.3 – 1.4 | in-process | full `level memLevel strategy windowBits` matrix; 1.4 verified byte-identical to 1.3.2 (full-depth one-shot + 710 streaming scenarios) |
 | zlib class D, 1.2.1–1.2.2 | native Zig (shared 1.2.3 engine, historical strategy limits) | verified with original 1.2.2 oracle; all releases available with `--external-zlib` |
-| zlib classes A–C, 1.0.1–1.2.0 | native Zig (class-specific variants: A stored layout, B `_tr_tally` heuristic, legacy FLEVEL/fill_window) | verified against the original C cores and all 16 official member binaries; C oracles kept in the `zlegacy` dev tool |
+| zlib classes A–C, 1.0.1–1.2.0 | native Zig (class-specific variants: A stored layout, B `_tr_tally` heuristic, legacy FLEVEL/fill_window) | verified against the original C cores and all 16 official member binaries; C oracles kept in the `zlegacy` dev tool; byte-identical coverage extends back to zlib 0.99 (0.95 emits the same bytes within its smaller API) |
 | zlib 1.2.3 / 1.2.5 / 1.2.7 / 1.2.8 / 1.2.11 / 1.2.12 / 1.2.13 / 1.3 / 1.3.1 / 1.3.2 | external binaries | skipped in default mode (integrated); enabled with `--external-zlib` |
 | zlib-ng 2.2.1 (compat) | external binary | `level memLevel strategy`, windowBits fixed to 15 |
 | Zopfli 1.0.3 / 1.0.2 / 1.0.1 / 1.0.0 | in-process | release-specific behaviour (header, tree encoder, block selection); 1.0.2 collapsed into the 1.0.3 representative (byte-identical), reported as `zopfli 1.0.2-1.0.3` |
@@ -258,7 +264,8 @@ that path only in the stage-3 sweep, and this port models the idealized
 
 Missing binaries are detected once up front and their profiles are
 skipped. Without any external binaries, the tool fingerprints all eight
-historical stock zlib classes from 1.0.1–1.3.2 in the tested one-shot model.
+historical stock zlib classes from 0.99/1.0.1–1.4 in the tested one-shot
+model (plus the streaming refinements documented in EQUIVALENCE.md).
 
 The earlier classes are A (1.0.1–1.0.5), B (1.0.6–1.0.9), C
 (1.1.0–1.2.0) and D (1.2.1–1.2.2). Their in-process priority is
@@ -438,7 +445,15 @@ scripts/
 ├── gen_edge.py        # FDICT / bad-FCHECK edge-case streams
 ├── diff_engine.py     # integrated engine vs 9 real zlib builds (1080 checks)
 ├── bench_new.py       # convergence benchmark over fixtures/
-└── bench_old.py       # naive-order comparison benchmark
+├── bench_old.py       # naive-order comparison benchmark
+├── stream_matrix.py   # streaming-API + full-depth one-shot differential
+│                      # (710 scenarios + 8,403 cases, 31 releases)
+├── asan_unstable.py   # sanitizer validation of the excluded UB paths
+├── build_options_check.py  # -O0/-O3/UNALIGNED_OK/DEBUG/FASTEST equivalence
+├── zopfli_matrix_ext.py    # Zopfli: new iterations + 24 MiB corpus
+├── gen_regression_fixtures.py  # self-validating golden-stream manifest
+└── regression_check.py     # end-to-end CI regression over the goldens
+fixtures-regression/    # 16 golden witnesses + manifest (see ci.yml)
 ```
 
 ## License

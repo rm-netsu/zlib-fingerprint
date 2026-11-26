@@ -275,3 +275,194 @@ python3 scripts/zopfli_ordering_bench.py     # order justification measurements
 Reference CLIs are built from the tagged sources, e.g.:
 `tar -xzf zopfli-1.0.2.tar.gz && cd zopfli-zopfli-1.0.2 && make zopfli`.
 Tarball SHA-256 values are recorded in `version-matrix.json`.
+
+## Streaming-API differential census and full-depth extension (2026-11-26)
+
+The deferred BACKLOG items were executed with a new scenario-driven
+streaming wrapper (`binaries/zstream_wrapper.c`, built per release as
+`binaries/zstream-<ver>`): chunked `avail_in`, capped `avail_out`,
+`Z_PARTIAL_FLUSH`/`Z_SYNC_FLUSH`/`Z_FULL_FLUSH`/`Z_BLOCK` at byte offsets
+and after every chunk, mid-stream `deflateParams`, `deflateSetDictionary`
+(FDICT), `deflateReset`, `deflateCopy` (source and clone continuation),
+plus a single-`Z_FINISH` mode byte-identical to the historical one-shot
+wrapper (cross-checked: 31 releases x 16 scenarios, 0 mismatches).
+
+Tools: `scripts/stream_matrix.py stream` (710 scenarios, 22,010 runs,
+31 releases 1.0.1-1.4) and `scripts/stream_matrix.py oneshot`
+(full-depth one-shot matrix: 8,403 cases, 260,493 runs, levels 0-9,
+memLevel 1/4/8/9, strategies 0-4, windowBits 9/15 over 21 boundary
+fixtures incl. MIN_MATCH/MAX_MATCH repeats and exact lit_bufsize
+boundaries, plus a 2 MiB mixed input at levels 1/6/9). Results:
+`stream-matrix.json`, `oneshot-ext-results.json`.
+
+### Refined equivalence structure
+
+The one-shot byte classes A-H stand; the *streaming* surface splits four
+of them further (all witnesses recorded in `stream-matrix.json`):
+
+| Pair | Kind | Evidence |
+|---|---|---|
+| 1.0.1-1.0.2 vs 1.0.4-1.0.5 | status only | level 0 with avail_out 1-2: the 1.0.1/1.0.2 `deflate_stored` returns `Z_BUF_ERROR` where 1.0.4+ completes (18 scenarios); 1.0.1/1.0.2 also *accept* numeric flush=5 while 1.0.4-1.2.3 reject it |
+| 1.1.0 vs 1.1.1-1.2.0 | bytes (rare) | mixed >= 512 KiB at level >= 4: 1.1.0 emits an extra early block flush |
+| 1.2.4-1.2.5 vs 1.2.6-1.2.8 | bytes | `Z_PARTIAL_FLUSH` marks at level 1 (425 vs 424 bytes witness); 55 differing scenarios |
+| 1.2.10 vs 1.2.11 vs 1.2.12-1.4 | bytes | level 0 with capped avail_out (outchunk 5: 1.2.10 alone differs; outchunk 8: all three differ); the 1.2.11 changelog confirms "Fix deflate stored bug when pulling last block from window" |
+
+The 1.1.0 split has a source-verified cause: 1.1.0 introduced the inline
+`_tr_tally_lit`/`_tr_tally_dist` macros (heuristic-free) for most call
+sites but kept ONE direct `_tr_tally` function call in `deflate_slow`'s
+previous-match path, so the 0xfff early-block-stop heuristic survives
+there in non-DEBUG builds. 1.1.1 moved the function's heuristic behind
+`#ifdef TRUNCATE_BLOCK` (off) and switched the last call site to the
+macro. 1.1.0's `-DDEBUG` build does not even compile (its `deflate.h`
+passes four arguments to the three-argument `_tr_tally`), so no
+DEBUG/release ambiguity exists for 1.1.0. The integrated engine's class
+C models 1.1.1-1.2.0; 1.1.0 diverges only on >= 512 KiB inputs at level
+>= 4 where the profitability condition first aligns with a 4096-symbol
+boundary (verified: 64/128/256 KiB mixed identical, 512 KiB differs).
+
+### API capability boundaries under streaming
+
+* `Z_BLOCK` (numeric flush 5): accepted by 1.0.1-1.0.2 (produces a valid
+  stream), rejected (`Z_STREAM_ERROR`) by 1.0.4 through 1.2.3, supported
+  from 1.2.4 on. At level 0 even 1.2.3 rejects it (1.2.3 vs 1.2.4 status
+  witness).
+* `deflateCopy`: 1.0.1-1.0.5 is an unimplemented stub returning
+  `Z_STREAM_ERROR` ("to be implemented"); working from 1.0.6 on. Where it
+  works, both the source stream and the clone continuation are
+  byte-identical to an uninterrupted run (self-check: 0 mismatches).
+* `deflateParams` to level 0 mid-stream at memLevel 1 aborts 1.0.4-1.0.5
+  with heap corruption (see the ASan section); class B survives.
+* `deflateReset`/`deflateParams` otherwise output-neutral: the post-reset
+  stream equals a fresh one-shot stream for every tested release up to
+  1.4 (0 self-check mismatches).
+* Dictionaries: identical dictionaries produce identical payloads across
+  all 31 releases for dict lengths 3/32/512/32768/70000 (FDICT headers
+  equal); the only witness in the dict group separates 1.0.9 from 1.1.0
+  on the 70000-byte dictionary (>32 KiB window) input.
+
+### 1.2.9 / 1.2.10 level-0 truncated-stream bugs
+
+With chunked `Z_NO_FLUSH` input at level 0, 1.2.9 emits incomplete
+streams (rc=0, no final block; decompression fails) across 85 scenario
+combinations, and 1.2.0-style 1.2.10 across 37 more (inchunk 64-65535
+combined with avail_out 16-32768). 1.2.11 fixed the stored-block
+pulling. The one-shot single-`Z_FINISH` model never triggers these: the
+documented empty-input case (`7801 00000001`, 6 bytes, no final block)
+cannot be inflated at all, and the fingerprint search reports it as an
+honest failure (regression case `g-empty-truncated`).
+
+### Definitive boundary conclusions
+
+* **1.2.2 vs 1.2.3 (D/E)**: 6,723 shared-success full-depth one-shot
+  cases + 678 streaming shared successes, **zero output differences**;
+  1,680 + 8 status differences, all `Z_FIXED` rejections. The boundary
+  is capability-only within everything tested.
+* **1.3.1 vs 1.3.2 and 1.3.2 vs 1.4**: 8,403 + 710 shared successes,
+  zero differences of either kind.
+* **zlib 1.4 (4 Nov 2026)**: source changes (`deflateResetKeep` now
+  retains window/hash and unfinished-block state, `deflateCopy`
+  rewritten to allocate via the source stream, stored-path return-code
+  macro, `deflatePrime` pending-buffer fixes, `deflateSetDictionary`
+  validation) are all outside the one-shot RFC-1950 byte model; the
+  integrated engine's class H range is extended to 1.2.10-1.4.
+
+## Pre-1.0 research: zlib 0.71 - 0.99 (2026-11-26)
+
+All 0.x tarballs are available from the upstream fossils archive and the
+GitHub mirror (tags v0.71 ... v0.99, v1.0-pre). Source inspection of
+0.71/0.79/0.8/0.9/0.91/0.93/0.95/0.99 shows the RFC 1950 header formula
+(`CMF = 8 + (w_bits-8)<<4`, `FLEVEL = (level-1)>>1` clamped to 3,
+FCHECK mod 31) identical across the whole series - the container format
+never changed after 0.71; it matches the pre-1.2.1 legacy formula the
+engine already implements.
+
+Differentially (1,600 one-shot parameter combinations + windowBits 8):
+
+* **zlib 0.99** (Jan 1996, `ZLIB_VERSION "1.0"`) is byte-identical to
+  class A on every tested combination including windowBits 8. Class A's
+  honest coverage is extended to **0.99-1.0.5**.
+* **zlib 0.95** emits the same bytes wherever it succeeds but is a
+  capability subset: no level 0 at all (deflateInit2 rejects it, hence
+  no stored streams), accepts numeric strategy 3 that 1.0.1+ reject,
+  and its public header has no `deflateParams`, `deflateSetDictionary`
+  or `deflateReset`; `deflateCopy` is the same unimplemented stub as
+  1.0.1-1.0.5. Its flush constants are swapped relative to every later
+  release (`Z_FULL_FLUSH 2`, `Z_SYNC_FLUSH 3`), so binary flush values
+  are not comparable across the 1.0 boundary.
+
+0.71-0.93 were not differentially run (their API predates even
+`deflateInit2` argument validation differences); the header formula and
+validation shape (level 1-9, windowBits 8-15) are source-identical to
+0.95.
+
+## ASan/UBSan validation of the documented unstable paths (2026-11-26)
+
+`scripts/asan_unstable.py` rebuilds 1.0.5, 1.0.9, 1.2.0, 1.2.2, 1.2.4,
+1.2.8, 1.2.9, 1.2.11 with
+`-fsanitize=address,undefined -fno-sanitize-recover=all` and runs the
+excluded paths plus controls. Results in `asan-results.json`:
+
+* class A level 0 with memLevel 1/4/7: **heap-buffer-overflow** in
+  `deflate_stored` (pending-buffer overrun) - the search's exclusion is
+  validated.
+* windowBits 8 at level >= 1 on 1.0.5/1.0.9: **SEGV** (the wrapped
+  `MAX_DIST` out-of-bounds path crashes outright under ASan).
+* `deflateParams` 9 -> 0 at memLevel 1 on 1.0.5: **heap-buffer-overflow**
+  (the streaming matrix's SIGABRT reproduced as memory corruption);
+  1.0.9 with identical parameters is clean.
+* 1.2.11 level 0 control: UBSan flags `memcpy(dst, NULL, 0)` in the
+  empty-stored-block emission (`_tr_stored_block(s, (char *)0, 0, ...)`)
+  - a benign by-the-letter UB fixed in later zlib, not a memory-safety
+  violation; with `-fno-sanitize-recover` the case aborts before
+  producing output.
+* The README's 1.2.4-1.2.8 "level 0 + strategy 2/3 heap overflow" claim
+  could **not** be reproduced by this harness under the swept conditions
+  (one-shot and avail_out 1-4096, text/random payloads 0-131072 bytes,
+  memLevel 1/4/8, windowBits 8/15, both strategies): all runs completed
+  cleanly. The path remains excluded from the search and the original
+  verification stands, but the triggering conditions are narrower than
+  the README wording suggested (corrected there).
+
+## Build-option output equivalence (2026-11-26)
+
+`scripts/build_options_check.py` compiles 1.1.4, 1.2.3 and 1.2.11 with
+`-O0`, `-O3`, `-DUNALIGNED_OK` and `-DDEBUG` and compares 180
+fixture/parameter combinations against the default build:
+**byte-identical everywhere** (`build-options-results.json`).
+`-DFASTEST` (available since 1.1.0) legitimately changes the output
+(forces level 1, no hash chains): 12 of 60 FASTEST comparisons differ,
+the rest coincide with the default build on these fixtures. x86-64
+only; ARM64 runs were not executed in this environment.
+
+## Zopfli matrix extension: new iterations and a 24 MiB corpus (2026-11-26)
+
+`scripts/zopfli_matrix_ext.py` extends the release matrix with iteration
+counts {4, 6, 7, 8, 9, 12, 20, 30, 60, 100} (outside the baseline
+{1, 2, 3, 5, 10, 15, 50}) on six corpus inputs, and with a 24 MiB mixed
+corpus at iterations 1 and 2 for all four releases. Every case compares
+the official release CLI (rebuilt from the tagged sources) with the
+native Zig variant: **68/68 byte-identical, 0 round-trip failures**
+(`zopfli-matrix-ext.json`). The producer grouping reproduces the known
+G1/G2/G3 classes; no release pair merged or split under the new
+iteration values, and the native port stays byte-exact at 100 iterations
+and on 24 MiB inputs.
+
+## Regression fixtures and CI (2026-11-26)
+
+`fixtures-regression/` + `scripts/regression_check.py` pin 16 minimal
+witnesses (every class boundary, the wbits-8 data-losing stream, the
+1.2.9 truncated empty stream, Zopfli 1.0.0/1.0.1/1.0.3 identification,
+zlib 1.4) as golden streams with SHA-256 manifests. The check verifies
+golden integrity, official-wrapper reproduction, native-engine
+byte-exactness and the end-to-end search identification (expected
+version range and parameters). The generator self-validates every
+search expectation against the actual tool output.
+`.github/workflows/ci.yml` runs the unit tests, the regression check and
+both differential matrices on every push.
+
+The regression harness immediately paid off: it caught the search never
+trying `Z_RLE` at levels other than 9 (a wrong "level does not matter"
+assumption - 1.2.3-and-earlier `Z_RLE` runs through
+`deflate_fast`/`deflate_slow` and is level-dependent; fixed in
+`src/fingerprint.zig`, stage 1 now probes level 1 and stage 2 sweeps
+levels 1-8 for strategy 3).

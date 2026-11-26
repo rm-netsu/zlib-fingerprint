@@ -1,0 +1,801 @@
+{
+  "tool": "scripts/stream_matrix.py oneshot",
+  "date": "2026-11-26",
+  "versions": [
+    "1.0.1",
+    "1.0.2",
+    "1.0.4",
+    "1.0.5",
+    "1.0.6",
+    "1.0.7",
+    "1.0.8",
+    "1.0.9",
+    "1.1.0",
+    "1.1.1",
+    "1.1.2",
+    "1.1.3",
+    "1.1.4",
+    "1.2.0",
+    "1.2.1",
+    "1.2.10",
+    "1.2.11",
+    "1.2.12",
+    "1.2.13",
+    "1.2.2",
+    "1.2.3",
+    "1.2.4",
+    "1.2.5",
+    "1.2.6",
+    "1.2.7",
+    "1.2.8",
+    "1.2.9",
+    "1.3",
+    "1.3.1",
+    "1.3.2",
+    "1.4"
+  ],
+  "depth": "full (levels 0-9, memLevel 1/4/8/9, strategies 0-4, windowBits 9/15) on boundary fixtures, plus 2 MiB mixed inputs at levels 1/6/9",
+  "fixtures": [
+    "empty",
+    "repeat-100",
+    "periodic-1000",
+    "random-2000",
+    "text-4096",
+    "mixed-4096",
+    "repeat-65535",
+    "periodic-65536",
+    "mixed-65536",
+    "periodic-131072",
+    "lit-126",
+    "lit-127",
+    "lit-128",
+    "lit-129",
+    "lit-130",
+    "lit-16382",
+    "lit-16383",
+    "lit-16384",
+    "lit-16385",
+    "lit-16386",
+    "matchb-2683",
+    "mixed-2mib"
+  ],
+  "probe_count": 8403,
+  "run_count": 260493,
+  "elapsed_seconds": 0.2,
+  "global_classes": [
+    [
+      "1.0.1",
+      "1.0.2",
+      "1.0.4",
+      "1.0.5"
+    ],
+    [
+      "1.0.6",
+      "1.0.7",
+      "1.0.8",
+      "1.0.9"
+    ],
+    [
+      "1.1.0"
+    ],
+    [
+      "1.1.1",
+      "1.1.2",
+      "1.1.3",
+      "1.1.4",
+      "1.2.0"
+    ],
+    [
+      "1.2.1",
+      "1.2.2"
+    ],
+    [
+      "1.2.10",
+      "1.2.11",
+      "1.2.12",
+      "1.2.13",
+      "1.3",
+      "1.3.1",
+      "1.3.2",
+      "1.4"
+    ],
+    [
+      "1.2.3"
+    ],
+    [
+      "1.2.4",
+      "1.2.5",
+      "1.2.6",
+      "1.2.7",
+      "1.2.8"
+    ],
+    [
+      "1.2.9"
+    ]
+  ],
+  "class_split_witnesses": [
+    {
+      "fixture": "mixed-2mib",
+      "params": [
+        6,
+        8,
+        0,
+        15
+      ],
+      "class": "C",
+      "kind": "bytes",
+      "signatures": {
+        "1.1.0": [
+          0,
+          550505,
+          "4b625e5371c827fd82006540cc00629a4eb1aa10346c55b590dd3898314b70d8"
+        ],
+        "1.1.1": [
+          0,
+          550443,
+          "49eb27549f445f9987a2830c5dc45406f0dd9f0a0ade715bdd0b00aa8e713fb1"
+        ],
+        "1.1.2": [
+          0,
+          550443,
+          "49eb27549f445f9987a2830c5dc45406f0dd9f0a0ade715bdd0b00aa8e713fb1"
+        ],
+        "1.1.3": [
+          0,
+          550443,
+          "49eb27549f445f9987a2830c5dc45406f0dd9f0a0ade715bdd0b00aa8e713fb1"
+        ],
+        "1.1.4": [
+          0,
+          550443,
+          "49eb27549f445f9987a2830c5dc45406f0dd9f0a0ade715bdd0b00aa8e713fb1"
+        ],
+        "1.2.0": [
+          0,
+          550443,
+          "49eb27549f445f9987a2830c5dc45406f0dd9f0a0ade715bdd0b00aa8e713fb1"
+        ]
+      }
+    }
+  ],
+  "class_split_count_capped": false,
+  "boundary_pair_stats": {
+    "1.0.2 / 1.0.4": {
+      "shared_success": 4932,
+      "output_diffs": 0,
+      "status_diffs": 0
+    },
+    "1.0.5 / 1.0.6": {
+      "shared_success": 4932,
+      "output_diffs": 21,
+      "status_diffs": 111
+    },
+    "1.0.9 / 1.1.0": {
+      "shared_success": 5043,
+      "output_diffs": 62,
+      "status_diffs": 0
+    },
+    "1.1.0 / 1.1.1": {
+      "shared_success": 5043,
+      "output_diffs": 1,
+      "status_diffs": 0
+    },
+    "1.2.0 / 1.2.1": {
+      "shared_success": 5043,
+      "output_diffs": 2352,
+      "status_diffs": 1680
+    },
+    "1.2.2 / 1.2.3": {
+      "shared_success": 6723,
+      "output_diffs": 0,
+      "status_diffs": 1680
+    },
+    "1.2.3 / 1.2.4": {
+      "shared_success": 8399,
+      "output_diffs": 577,
+      "status_diffs": 4
+    },
+    "1.2.5 / 1.2.6": {
+      "shared_success": 8399,
+      "output_diffs": 0,
+      "status_diffs": 0
+    },
+    "1.2.8 / 1.2.9": {
+      "shared_success": 8399,
+      "output_diffs": 503,
+      "status_diffs": 4
+    },
+    "1.2.9 / 1.2.10": {
+      "shared_success": 8403,
+      "output_diffs": 40,
+      "status_diffs": 0
+    },
+    "1.2.10 / 1.2.11": {
+      "shared_success": 8403,
+      "output_diffs": 0,
+      "status_diffs": 0
+    },
+    "1.2.11 / 1.2.12": {
+      "shared_success": 8403,
+      "output_diffs": 0,
+      "status_diffs": 0
+    },
+    "1.3.1 / 1.3.2": {
+      "shared_success": 8403,
+      "output_diffs": 0,
+      "status_diffs": 0
+    },
+    "1.3.2 / 1.4": {
+      "shared_success": 8403,
+      "output_diffs": 0,
+      "status_diffs": 0
+    }
+  },
+  "first_output_differences": {
+    "1.2.0 / 1.2.1": {
+      "fixture": "empty",
+      "params": [
+        0,
+        1,
+        0,
+        9
+      ],
+      "lengths": [
+        11,
+        11
+      ],
+      "first_diff": {
+        "offset": 1,
+        "a": "18d3010000ffff",
+        "b": "1819010000ffff"
+      }
+    },
+    "1.2.8 / 1.2.9": {
+      "fixture": "empty",
+      "params": [
+        0,
+        1,
+        0,
+        9
+      ],
+      "lengths": [
+        11,
+        6
+      ],
+      "first_diff": {
+        "offset": 2,
+        "a": "1819010000ffff00",
+        "b": "181900000001"
+      }
+    },
+    "1.2.9 / 1.2.10": {
+      "fixture": "empty",
+      "params": [
+        0,
+        1,
+        0,
+        9
+      ],
+      "lengths": [
+        6,
+        11
+      ],
+      "first_diff": {
+        "offset": 2,
+        "a": "181900000001",
+        "b": "1819010000ffff00"
+      }
+    },
+    "1.2.3 / 1.2.4": {
+      "fixture": "repeat-100",
+      "params": [
+        1,
+        1,
+        3,
+        9
+      ],
+      "lengths": [
+        12,
+        11
+      ],
+      "first_diff": {
+        "offset": 3,
+        "a": "197374a43d000002",
+        "b": "1973a403000002e9"
+      }
+    },
+    "1.0.5 / 1.0.6": {
+      "fixture": "text-4096",
+      "params": [
+        0,
+        4,
+        0,
+        15
+      ],
+      "lengths": [
+        4107,
+        4112
+      ],
+      "first_diff": {
+        "offset": 2,
+        "a": "78da010010ffef61",
+        "b": "78da00fb0f04f061"
+      }
+    },
+    "1.0.9 / 1.1.0": {
+      "fixture": "mixed-65536",
+      "params": [
+        3,
+        8,
+        0,
+        9
+      ],
+      "lengths": [
+        20459,
+        20283
+      ],
+      "first_diff": {
+        "offset": 4,
+        "a": "ecca693c94fbffc7",
+        "b": "ecca593894ffffc7"
+      }
+    },
+    "1.1.0 / 1.1.1": {
+      "fixture": "mixed-2mib",
+      "params": [
+        6,
+        8,
+        0,
+        15
+      ],
+      "lengths": [
+        550505,
+        550443
+      ],
+      "first_diff": null
+    }
+  },
+  "roundtrip_failures": [
+    {
+      "fixture": "empty",
+      "params": [
+        0,
+        1,
+        0,
+        9
+      ],
+      "version": "1.2.9",
+      "error": "Error -5 while decompressing data: incomplete or truncated stream"
+    },
+    {
+      "fixture": "empty",
+      "params": [
+        0,
+        1,
+        0,
+        15
+      ],
+      "version": "1.2.9",
+      "error": "Error -5 while decompressing data: incomplete or truncated stream"
+    },
+    {
+      "fixture": "empty",
+      "params": [
+        0,
+        1,
+        1,
+        9
+      ],
+      "version": "1.2.9",
+      "error": "Error -5 while decompressing data: incomplete or truncated stream"
+    },
+    {
+      "fixture": "empty",
+      "params": [
+        0,
+        1,
+        1,
+        15
+      ],
+      "version": "1.2.9",
+      "error": "Error -5 while decompressing data: incomplete or truncated stream"
+    },
+    {
+      "fixture": "empty",
+      "params": [
+        0,
+        1,
+        2,
+        9
+      ],
+      "version": "1.2.9",
+      "error": "Error -5 while decompressing data: incomplete or truncated stream"
+    },
+    {
+      "fixture": "empty",
+      "params": [
+        0,
+        1,
+        2,
+        15
+      ],
+      "version": "1.2.9",
+      "error": "Error -5 while decompressing data: incomplete or truncated stream"
+    },
+    {
+      "fixture": "empty",
+      "params": [
+        0,
+        1,
+        3,
+        9
+      ],
+      "version": "1.2.9",
+      "error": "Error -5 while decompressing data: incomplete or truncated stream"
+    },
+    {
+      "fixture": "empty",
+      "params": [
+        0,
+        1,
+        3,
+        15
+      ],
+      "version": "1.2.9",
+      "error": "Error -5 while decompressing data: incomplete or truncated stream"
+    },
+    {
+      "fixture": "empty",
+      "params": [
+        0,
+        1,
+        4,
+        9
+      ],
+      "version": "1.2.9",
+      "error": "Error -5 while decompressing data: incomplete or truncated stream"
+    },
+    {
+      "fixture": "empty",
+      "params": [
+        0,
+        1,
+        4,
+        15
+      ],
+      "version": "1.2.9",
+      "error": "Error -5 while decompressing data: incomplete or truncated stream"
+    },
+    {
+      "fixture": "empty",
+      "params": [
+        0,
+        4,
+        0,
+        9
+      ],
+      "version": "1.2.9",
+      "error": "Error -5 while decompressing data: incomplete or truncated stream"
+    },
+    {
+      "fixture": "empty",
+      "params": [
+        0,
+        4,
+        0,
+        15
+      ],
+      "version": "1.2.9",
+      "error": "Error -5 while decompressing data: incomplete or truncated stream"
+    },
+    {
+      "fixture": "empty",
+      "params": [
+        0,
+        4,
+        1,
+        9
+      ],
+      "version": "1.2.9",
+      "error": "Error -5 while decompressing data: incomplete or truncated stream"
+    },
+    {
+      "fixture": "empty",
+      "params": [
+        0,
+        4,
+        1,
+        15
+      ],
+      "version": "1.2.9",
+      "error": "Error -5 while decompressing data: incomplete or truncated stream"
+    },
+    {
+      "fixture": "empty",
+      "params": [
+        0,
+        4,
+        2,
+        9
+      ],
+      "version": "1.2.9",
+      "error": "Error -5 while decompressing data: incomplete or truncated stream"
+    },
+    {
+      "fixture": "empty",
+      "params": [
+        0,
+        4,
+        2,
+        15
+      ],
+      "version": "1.2.9",
+      "error": "Error -5 while decompressing data: incomplete or truncated stream"
+    },
+    {
+      "fixture": "empty",
+      "params": [
+        0,
+        4,
+        3,
+        9
+      ],
+      "version": "1.2.9",
+      "error": "Error -5 while decompressing data: incomplete or truncated stream"
+    },
+    {
+      "fixture": "empty",
+      "params": [
+        0,
+        4,
+        3,
+        15
+      ],
+      "version": "1.2.9",
+      "error": "Error -5 while decompressing data: incomplete or truncated stream"
+    },
+    {
+      "fixture": "empty",
+      "params": [
+        0,
+        4,
+        4,
+        9
+      ],
+      "version": "1.2.9",
+      "error": "Error -5 while decompressing data: incomplete or truncated stream"
+    },
+    {
+      "fixture": "empty",
+      "params": [
+        0,
+        4,
+        4,
+        15
+      ],
+      "version": "1.2.9",
+      "error": "Error -5 while decompressing data: incomplete or truncated stream"
+    },
+    {
+      "fixture": "empty",
+      "params": [
+        0,
+        8,
+        0,
+        9
+      ],
+      "version": "1.2.9",
+      "error": "Error -5 while decompressing data: incomplete or truncated stream"
+    },
+    {
+      "fixture": "empty",
+      "params": [
+        0,
+        8,
+        0,
+        15
+      ],
+      "version": "1.2.9",
+      "error": "Error -5 while decompressing data: incomplete or truncated stream"
+    },
+    {
+      "fixture": "empty",
+      "params": [
+        0,
+        8,
+        1,
+        9
+      ],
+      "version": "1.2.9",
+      "error": "Error -5 while decompressing data: incomplete or truncated stream"
+    },
+    {
+      "fixture": "empty",
+      "params": [
+        0,
+        8,
+        1,
+        15
+      ],
+      "version": "1.2.9",
+      "error": "Error -5 while decompressing data: incomplete or truncated stream"
+    },
+    {
+      "fixture": "empty",
+      "params": [
+        0,
+        8,
+        2,
+        9
+      ],
+      "version": "1.2.9",
+      "error": "Error -5 while decompressing data: incomplete or truncated stream"
+    },
+    {
+      "fixture": "empty",
+      "params": [
+        0,
+        8,
+        2,
+        15
+      ],
+      "version": "1.2.9",
+      "error": "Error -5 while decompressing data: incomplete or truncated stream"
+    },
+    {
+      "fixture": "empty",
+      "params": [
+        0,
+        8,
+        3,
+        9
+      ],
+      "version": "1.2.9",
+      "error": "Error -5 while decompressing data: incomplete or truncated stream"
+    },
+    {
+      "fixture": "empty",
+      "params": [
+        0,
+        8,
+        3,
+        15
+      ],
+      "version": "1.2.9",
+      "error": "Error -5 while decompressing data: incomplete or truncated stream"
+    },
+    {
+      "fixture": "empty",
+      "params": [
+        0,
+        8,
+        4,
+        9
+      ],
+      "version": "1.2.9",
+      "error": "Error -5 while decompressing data: incomplete or truncated stream"
+    },
+    {
+      "fixture": "empty",
+      "params": [
+        0,
+        8,
+        4,
+        15
+      ],
+      "version": "1.2.9",
+      "error": "Error -5 while decompressing data: incomplete or truncated stream"
+    },
+    {
+      "fixture": "empty",
+      "params": [
+        0,
+        9,
+        0,
+        9
+      ],
+      "version": "1.2.9",
+      "error": "Error -5 while decompressing data: incomplete or truncated stream"
+    },
+    {
+      "fixture": "empty",
+      "params": [
+        0,
+        9,
+        0,
+        15
+      ],
+      "version": "1.2.9",
+      "error": "Error -5 while decompressing data: incomplete or truncated stream"
+    },
+    {
+      "fixture": "empty",
+      "params": [
+        0,
+        9,
+        1,
+        9
+      ],
+      "version": "1.2.9",
+      "error": "Error -5 while decompressing data: incomplete or truncated stream"
+    },
+    {
+      "fixture": "empty",
+      "params": [
+        0,
+        9,
+        1,
+        15
+      ],
+      "version": "1.2.9",
+      "error": "Error -5 while decompressing data: incomplete or truncated stream"
+    },
+    {
+      "fixture": "empty",
+      "params": [
+        0,
+        9,
+        2,
+        9
+      ],
+      "version": "1.2.9",
+      "error": "Error -5 while decompressing data: incomplete or truncated stream"
+    },
+    {
+      "fixture": "empty",
+      "params": [
+        0,
+        9,
+        2,
+        15
+      ],
+      "version": "1.2.9",
+      "error": "Error -5 while decompressing data: incomplete or truncated stream"
+    },
+    {
+      "fixture": "empty",
+      "params": [
+        0,
+        9,
+        3,
+        9
+      ],
+      "version": "1.2.9",
+      "error": "Error -5 while decompressing data: incomplete or truncated stream"
+    },
+    {
+      "fixture": "empty",
+      "params": [
+        0,
+        9,
+        3,
+        15
+      ],
+      "version": "1.2.9",
+      "error": "Error -5 while decompressing data: incomplete or truncated stream"
+    },
+    {
+      "fixture": "empty",
+      "params": [
+        0,
+        9,
+        4,
+        9
+      ],
+      "version": "1.2.9",
+      "error": "Error -5 while decompressing data: incomplete or truncated stream"
+    },
+    {
+      "fixture": "empty",
+      "params": [
+        0,
+        9,
+        4,
+        15
+      ],
+      "version": "1.2.9",
+      "error": "Error -5 while decompressing data: incomplete or truncated stream"
+    }
+  ],
+  "note": "Extended one-shot matrix; supersedes the quick depth for the listed fixtures. Finite evidence, not a proof."
+}
