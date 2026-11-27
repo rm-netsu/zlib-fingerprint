@@ -5,8 +5,8 @@
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .zlib_replicant = .{
-            .url = "git+https://github.com/rm-netsu/zlib-replicant.git#36a25d41328bf3b7bd7e4552822e61f881054ffd",
-            .hash = "zlib_replicant-0.1.0-ke6LQ3CwAgBUNooKUBIlXqLqi9mBMVnhP3GTM6clqM_W",
+            .url = "git+https://github.com/rm-netsu/zlib-replicant.git?ref=v0.1.0#94812e94f5a417dc008391136e4000b94ecd8da2",
+            .hash = "zlib_replicant-0.1.0-ke6LQ5E3DwCpl_wSati5M1PHCCBsSyUsC_Tud-reE9dU",
         },
     },
     .paths = .{
