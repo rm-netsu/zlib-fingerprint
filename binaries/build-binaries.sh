@@ -48,7 +48,7 @@ fetch() { # fetch <url> <dest-file> (atomic: partial downloads never persist)
 # both the package suites and the --external-zlib audit mode.
 # ---------------------------------------------------------------------------
 OUT_DIR="$CDIR" VENDOR_DIR="$CDIR/vendor" \
-    bash "$CDIR/../zig-pkg/zlib_replicant-0.1.0-ke6LQ3CwAgBUNooKUBIlXqLqi9mBMVnhP3GTM6clqM_W/binaries/build-references.sh"
+    bash "$CDIR/../zig-pkg/zlib_replicant-0.1.1-ke6LQ4Y6DwCnsz45zZhdic0plOrjGSvtd6n_pyQjufll/binaries/build-references.sh"
 
 # Differential matrix can build only stock zlib releases, without fetching
 # optional third-party implementations.
