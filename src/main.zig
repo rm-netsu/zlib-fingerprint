@@ -11,25 +11,9 @@ const profiles_mod = @import("profiles.zig");
 const fingerprint = @import("fingerprint.zig");
 const ui = @import("ui.zig");
 comptime {
-    _ = @import("zopfli/hash.zig");
-    _ = @import("zopfli/cache.zig");
-    _ = @import("zopfli/lz77_store.zig");
-    _ = @import("zopfli/lz77_greedy.zig");
-    _ = @import("zopfli/lz77_match.zig");
-    _ = @import("zopfli/squeeze_path.zig");
-    _ = @import("zopfli/squeeze_stats.zig");
-    _ = @import("zopfli/squeeze_forward.zig");
-    _ = @import("zopfli/squeeze_optimal.zig");
-    _ = @import("zopfli/blocksplitter.zig");
-    _ = @import("zopfli/deflate_rle.zig");
-    _ = @import("zopfli/deflate_cost.zig");
-    _ = @import("zopfli/deflate_tree_encode.zig");
-    _ = @import("zopfli/deflate_lz77_output.zig");
-    _ = @import("zopfli/deflate_dynamic.zig");
-    _ = @import("zopfli/deflate_block_size.zig");
-    _ = @import("zopfli/deflate_driver.zig");
-    _ = @import("zopfli/tree.zig");
-    _ = @import("zopfli/katajainen.zig");
+    // The zopfli engine's module list moved into the zopfli-replicant
+    // package (its src/native.zig root forces every engine module into
+    // the import graph); the sibling engines stay analyzed here.
     _ = @import("miniz/tdefl.zig");
     _ = @import("zlibng/deflate.zig");
 }
@@ -319,9 +303,6 @@ test {
     _ = @import("fingerprint.zig");
     _ = @import("ui.zig");
     _ = @import("zlib-replicant");
-    _ = @import("zopfli/native.zig");
-    _ = @import("zopfli/bitstream.zig");
-    _ = @import("zopfli/tree.zig");
-    _ = @import("zopfli/hash.zig");
+    _ = @import("zopfli-replicant");
     std.testing.refAllDecls(@This());
 }

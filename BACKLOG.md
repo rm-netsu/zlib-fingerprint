@@ -107,8 +107,9 @@
 
 Текущие воспроизводимые результаты: [EQUIVALENCE.md](EQUIVALENCE.md),
 `zlib-replicant/results/equivalence-results.json`, `zlib-replicant/results/boundary-results.json`, `zlib-replicant/results/stream-matrix.json`,
-`zlib-replicant/results/oneshot-ext-results.json`, `zlib-replicant/results/asan-results.json`, `zlib-replicant/results/build-options-results.json`,
-`zopfli-matrix-ext.json`.
+`zlib-replicant/results/oneshot-ext-results.json`, `zlib-replicant/results/asan-results.json`, `zlib-replicant/results/build-options-results.json`
+(в клоне репозитория движка — зависимость поставляет только сам движок),
+`zopfli-replicant/results/zopfli-matrix-ext.json`.
 
 ## Нативные порты zlib-ng и miniz (2026-11-27)
 
@@ -232,11 +233,11 @@
 - [x] Подтвердить полный список официальных тегов (git ls-remote: 1.0.0,
   1.0.1, 1.0.2, 1.0.3; других тегов нет) и получить исходники каждого
   выпуска; зафиксировать тег, коммит и SHA-256 архива
-  (см. `version-matrix.json.reference_tarballs`).
+  (см. `zopfli-replicant/results/version-matrix.json`, ключ reference_tarballs).
 - [x] Собрать четыре независимых эталонных CLI из тегированных исходников.
-- [x] Построить побайтовую матрицу (`scripts/version_matrix.py`):
+- [x] Построить побайтовую матрицу (`zopfli-replicant/scripts/version_matrix.py`):
   38 входов, 356 комбинаций, обратная распаковка каждого потока,
-  классы и группы эквивалентности в `version-matrix.json`.
+  классы и группы эквивалентности в `zopfli-replicant/results/version-matrix.json`.
 - [x] Сопоставить межверсионные различия исходников с расхождениями
   матрицы (FLEVEL, master block, tree encoder, RLE-гистограмма,
   auto-типы, пустой ввод) и задокументировать в `EQUIVALENCE.md`.
@@ -245,13 +246,13 @@
   always-RLE длины 1.0.1, auto-типы 1.0.2/1.0.3, master-блоки 20 МБ/1 МБ,
   легаси-отсечение squeeze, легаси-модель стоимости blocksplitter.
 - [x] Подтвердить побайтовую точность каждого варианта относительно
-  оригинала: 356/356 в `diff_zopfli_native.py` + 89/89 комбинаций матрицы.
+  оригинала: 356/356 в `zopfli-replicant/scripts/diff_zopfli_native.py` + 89/89 комбинаций матрицы.
 - [x] Обновить fingerprint-поиск: профили всех четырёх выпусков,
   предсказание заголовка по выпуску (78 01 / 78 da), свёртка 1.0.2 в
   представителя 1.0.3 с отчётом группы `zopfli 1.0.2-1.0.3`, примечание
   о неоднозначности stored-потоков.
 - [x] Обосновать порядок версий и итераций измерениями
-  (`scripts/zopfli_ordering_bench.py`, `zopfli-ordering-bench.json`):
+  (`zopfli-replicant/scripts/zopfli_ordering_bench.py`, `zopfli-replicant/results/zopfli-ordering-bench.json`):
   варианты стоят одинаково; baseline-набор итераций покрывает все
   наблюдаемые выходы для каждого выпуска.
 - [x] Сквозная проверка поиска на потоках каждого выпуска:
@@ -264,7 +265,7 @@
   соответствующие среды).
 - [x] Расширить матрицу выпусков итерациями за пределы {1,2,3,5,10,15,50}
   и корпусом >20 МБ смешанных данных.
-  (`scripts/zopfli_matrix_ext.py`: итерации {4,6,7,8,9,12,20,30,60,100}
+  (`zopfli-replicant/scripts/zopfli_matrix_ext.py`: итерации {4,6,7,8,9,12,20,30,60,100}
   на шести входах + 24 МиБ mixed на итерациях 1 и 2 для всех четырёх
   выпусков; 68/68 CLI == native побайтово, 0 ошибок распаковки,
-  `zopfli-matrix-ext.json`)
+  `zopfli-replicant/results/zopfli-matrix-ext.json`)

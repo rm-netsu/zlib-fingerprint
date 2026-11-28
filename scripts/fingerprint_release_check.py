@@ -5,8 +5,14 @@ Generates zlib streams with each reference zopfli CLI (1.0.0..1.0.3) and a
 few non-zopfli producers, runs the zlib-fingerprint search on them and checks
 that the reported producer reproduces the stream bit-exactly and that zopfli
 streams are attributed to the correct equivalence group.
+
+The reference CLIs are resolved like the zopfli-replicant suites resolve
+them: $ZOPFLI_REF_BINARIES, then the repository's binaries/ directory
+(bash zopfli-replicant/binaries/build-references.sh), then the package's
+own binaries/ directory.
 """
 import json
+import os
 import pathlib
 import random
 import subprocess
@@ -16,8 +22,24 @@ import zlib
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SEARCH = ROOT / "zig-out/bin/zlib-fingerprint"
-REFERENCES = {v: pathlib.Path(f"/home/z/my-project/work/references/built-{v}/zopfli-{v}")
-              for v in ("1.0.0", "1.0.1", "1.0.2", "1.0.3")}
+
+
+def reference(version: str) -> pathlib.Path:
+    env = os.environ.get("ZOPFLI_REF_BINARIES")
+    candidates = ([pathlib.Path(env)] if env else []) + [
+        ROOT / "binaries",
+        ROOT / "zopfli-replicant" / "binaries",
+    ]
+    for base in candidates:
+        cli = base / f"zopfli-{version}"
+        if cli.is_file():
+            return cli
+    raise SystemExit(
+        f"zopfli-{version} reference CLI not found; build them with: "
+        f"bash {ROOT / 'zopfli-replicant' / 'binaries' / 'build-references.sh'}")
+
+
+REFERENCES = {v: reference(v) for v in ("1.0.0", "1.0.1", "1.0.2", "1.0.3")}
 
 PAYLOADS = {
     "text-8k": (b"The quick brown fox jumps over the lazy dog. " * 180)[:8192],

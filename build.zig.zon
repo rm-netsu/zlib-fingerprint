@@ -8,6 +8,10 @@
             .url = "git+https://github.com/rm-netsu/zlib-replicant.git?ref=v0.1.1#4c8645151adf55214de934d122d98e38b0d353a2",
             .hash = "zlib_replicant-0.1.1-ke6LQ4Y6DwCnsz45zZhdic0plOrjGSvtd6n_pyQjufll",
         },
+        .zopfli_replicant = .{
+            .url = "git+https://github.com/rm-netsu/zopfli-replicant.git?ref=v0.1.0#cd9db1008a339ac7e9f68c0c718d0431e4e4c597",
+            .hash = "zopfli_replicant-0.1.0-H8jg5vdUDgC0NekurnWgGTWL-Cmzk1uTs1pPD8J3-Pr4",
+        },
     },
     .paths = .{
         "build.zig",
@@ -19,7 +23,5 @@
         "README.md",
         "EQUIVALENCE.md",
         "BACKLOG.md",
-        "version-matrix.json",
-        "zopfli-ordering-bench.json",
     },
 }

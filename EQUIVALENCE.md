@@ -204,7 +204,8 @@ boundaries, 20,000,001-byte legacy master-boundary inputs, and inputs aimed
 at the discovered tree-encoder differences. Every stream was round-tripped
 through zlib decompression; every run recorded version, parameters, input
 id, process status, output size, SHA-256 and decompression success
-(`version-matrix.json`, tool: `scripts/version_matrix.py`).
+(`zopfli-replicant/results/version-matrix.json`, tool:
+`zopfli-replicant/scripts/version_matrix.py`).
 
 **Observed result classes (full streams):**
 
@@ -238,15 +239,17 @@ Minimal reproducible differences (first occurrence in matrix order):
   preserves glibc's observed ordering).
 
 **Native variants:** all four releases run natively on Zig
-(`src/zopfli/release.zig` variant parameter). Native vs official CLI:
-356/356 byte-exact combinations in `scripts/diff_zopfli_native.py`, plus
+(`zopfli-replicant/src/release.zig` variant parameter). Native vs official CLI:
+356/356 byte-exact combinations in
+`zopfli-replicant/scripts/diff_zopfli_native.py`, plus
 89/89 combinations inside the matrix, with round-trip decompression for
 every produced stream.
 
 **Search integration:** on a `78 da` stream only the G3 representative
 (1.0.3) is searched; on a `78 01` stream only G2 (1.0.1) and G1 (1.0.0),
 in that order. The order is justified by measurements
-(`scripts/zopfli_ordering_bench.py`, `zopfli-ordering-bench.json`): the
+(`zopfli-replicant/scripts/zopfli_ordering_bench.py`,
+`zopfli-replicant/results/zopfli-ordering-bench.json`): the
 release variants cost the same per iteration, so the choice is purely
 prior-based (newest first within a header class), and the baseline
 iteration set covers all distinct outputs observed on the probe fixtures
@@ -266,20 +269,23 @@ the mapping input-dependent).
 
 ```sh
 zig build --release=fast
-python3 scripts/diff_zopfli_native.py        # needs built-<ver>/zopfli-<ver> reference CLIs
-python3 scripts/version_matrix.py --quick    # reduced corpus; full run: drop --quick (or use --from/--to chunks)
-python3 scripts/fingerprint_release_check.py # end-to-end search per release
-python3 scripts/zopfli_ordering_bench.py     # order justification measurements
+bash zopfli-replicant/binaries/build-references.sh   # official CLIs 1.0.0-1.0.3
+python3 zopfli-replicant/scripts/diff_zopfli_native.py        # every release vs the official CLIs
+python3 zopfli-replicant/scripts/version_matrix.py --quick    # reduced corpus; full run: drop --quick (or use --from/--to chunks + merge_matrix.py)
+python3 scripts/fingerprint_release_check.py                  # end-to-end search per release
+python3 zopfli-replicant/scripts/zopfli_ordering_bench.py     # order justification measurements
 ```
 
-Reference CLIs are built from the tagged sources, e.g.:
-`tar -xzf zopfli-1.0.2.tar.gz && cd zopfli-zopfli-1.0.2 && make zopfli`.
-Tarball SHA-256 values are recorded in `version-matrix.json`.
+Reference CLIs are built by the package from the tagged official
+sources (verified against `zopfli-replicant/binaries/SHA256SUMS`);
+the vendored untouched 1.0.3 distribution stays at
+`zopfli-replicant/binaries/vendor/zopfli-zopfli-1.0.3/`.
 
 ## Streaming-API differential census and full-depth extension (2026-11-26)
 
 The deferred BACKLOG items were executed with a new scenario-driven
-streaming wrapper (`binaries/zstream_wrapper.c`, built per release as
+streaming wrapper (the zlib-replicant engine package's
+`binaries/zstream_wrapper.c`, built per release as
 `binaries/zstream-<ver>`): chunked `avail_in`, capped `avail_out`,
 `Z_PARTIAL_FLUSH`/`Z_SYNC_FLUSH`/`Z_FULL_FLUSH`/`Z_BLOCK` at byte offsets
 and after every chunk, mid-stream `deflateParams`, `deflateSetDictionary`
@@ -436,14 +442,15 @@ only; ARM64 runs were not executed in this environment.
 
 ## Zopfli matrix extension: new iterations and a 24 MiB corpus (2026-11-26)
 
-`scripts/zopfli_matrix_ext.py` extends the release matrix with iteration
+`zopfli-replicant/scripts/zopfli_matrix_ext.py` extends the release
+matrix with iteration
 counts {4, 6, 7, 8, 9, 12, 20, 30, 60, 100} (outside the baseline
 {1, 2, 3, 5, 10, 15, 50}) on six corpus inputs, and with a 24 MiB mixed
 corpus at iterations 1 and 2 for all four releases. Every case compares
 the official release CLI (rebuilt from the tagged sources) with the
 native Zig variant: **68/68 byte-identical, 0 round-trip failures**
-(`zopfli-matrix-ext.json`). The producer grouping reproduces the known
-G1/G2/G3 classes; no release pair merged or split under the new
+(`zopfli-replicant/results/zopfli-matrix-ext.json`). The producer grouping
+reproduces the known G1/G2/G3 classes; no release pair merged or split under the new
 iteration values, and the native port stays byte-exact at 100 iterations
 and on 24 MiB inputs.
 

@@ -2,17 +2,24 @@ zig-out/
 zig-pkg/
 .zig-cache/
 
+# The zlib-replicant engine-repository clone used by the differential
+# suites (CI checks it out at the tag pinned in build.zig.zon; the
+# fetched dependency cache cannot ship those scripts — zon .paths
+# exports the engine only)
+/zlib-replicant/
+
 # Binaries in the binaries/ folder (keep the README, ignore binaries)
 binaries/*
 !binaries/README.md
 !binaries/*.sh
 !binaries/*.c
 
-# Vendored third-party source trees: keep the upstream sources as the
-# independent reference, ignore anything built inside them
-!binaries/vendor/
-binaries/vendor/*/obj/
-binaries/vendor/*/zopfli
+# Everything under binaries/vendor/ is fetched on demand by
+# build-binaries.sh and the delegated package builders (zlib-replicant,
+# zopfli-replicant, zlib-ng, miniz, libdeflate, advancecomp); the
+# committed zopfli 1.0.3 reference tree now lives inside the
+# zopfli-replicant package.
+binaries/vendor/
 
 *.idat
 
@@ -34,10 +41,3 @@ build-options-work/
 outputs/zopfli-references/
 *-journal.jsonl
 oneshot-ext-journal.jsonl
-
-# Re-downloadable vendor trees (build-binaries.sh fetches them on demand);
-# only the committed zopfli reference stays in the tree.
-binaries/vendor/zlib-ng-2.2.1*
-binaries/vendor/miniz-3.1.2*
-binaries/vendor/libdeflate-1.20*
-binaries/vendor/advancecomp-2.6*

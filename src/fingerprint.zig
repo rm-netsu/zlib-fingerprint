@@ -37,7 +37,7 @@ const hints = @import("hints.zig");
 const profiles_mod = @import("profiles.zig");
 const ui = @import("ui.zig");
 const replicant = @import("zlib-replicant");
-const zopfli_native = @import("zopfli/native.zig");
+const zopfli_native = @import("zopfli-replicant");
 const miniz_tdefl = @import("miniz/tdefl.zig");
 const zlibng = @import("zlibng/deflate.zig");
 

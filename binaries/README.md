@@ -30,7 +30,10 @@ To ensure precise tracking and avoid discrepancies between different releases, a
 
 ## Compiling a Specific Version (C Wrapper Example)
 
-When compiling a specific version of official zlib (e.g., `1.2.8`), name the output binary accordingly:
+The wrapper sources themselves live in the **zlib-replicant** engine
+package (see below); from a clone of that repository, compiling a
+specific version of official zlib (e.g., `1.2.8`) and naming the output
+accordingly looks like:
 
 ```bash
 gcc -O3 zlib_wrapper.c -lz -o zlib-1.2.8
@@ -42,9 +45,19 @@ The official stock-zlib wrappers for every release 1.0.1-1.4 are
 the differential-testing oracles of the **zlib-replicant** engine package:
 their wrapper sources (`zlib_wrapper.c`, `zstream_wrapper.c`)
 and the build recipe live there, and `build-binaries.sh` delegates
-the whole family to the package's `zlib-replicant/binaries/build-references.sh`
-with `OUT_DIR`/`VENDOR_DIR` pointing here. `ZLIB_ONLY=1 bash build-binaries.sh`
-builds just this family.
+the whole family to the package's `binaries/build-references.sh`
+(locating the package copy itself — an engine clone at
+`zlib-replicant/` or the fetched dependency under `zig-pkg/` —
+never a hardcoded cache path) with `OUT_DIR`/`VENDOR_DIR` pointing
+here. `ZLIB_ONLY=1 bash build-binaries.sh` builds just this family.
+
+## Zopfli reference CLIs (zopfli-1.0.0 .. zopfli-1.0.3)
+
+The official Zopfli release CLIs are the differential-testing oracles
+of the **zopfli-replicant** engine package: the build recipe, the
+tarball checksum manifest and the vendored untouched 1.0.3 reference
+tree live there (`zopfli-replicant/binaries/`), and `build-binaries.sh`
+delegates the family to its `build-references.sh` the same way.
 
 ---
 

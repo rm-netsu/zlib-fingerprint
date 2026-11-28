@@ -19,6 +19,21 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(zlib_replicant.artifact("zcompress"));
     b.installArtifact(zlib_replicant.artifact("zlegacy"));
 
+    // The native Zopfli engine (every historical release 1.0.0-1.0.3) lives
+    // in the separate zopfli-replicant package and is imported as the
+    // module name "zopfli-replicant". The package also builds the
+    // differential-testing tools (zzopfli, the CLI-equivalent harness, and
+    // zkatajainen for the package-merge kernel); this root build installs
+    // them here as well, keeping a single tool location for the search and
+    // the differential suites.
+    const zopfli_replicant = b.dependency("zopfli_replicant", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const zopfli_mod = zopfli_replicant.module("zopfli-replicant");
+    b.installArtifact(zopfli_replicant.artifact("zzopfli"));
+    b.installArtifact(zopfli_replicant.artifact("zkatajainen"));
+
     const exe = b.addExecutable(.{
         .name = "zlib-fingerprint",
         .root_module = b.createModule(.{
@@ -28,6 +43,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     exe.root_module.addImport("zlib-replicant", replicant_mod);
+    exe.root_module.addImport("zopfli-replicant", zopfli_mod);
     addZopfliRuntime(exe.root_module);
     b.installArtifact(exe);
 
@@ -66,39 +82,15 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(zzlibng);
 
     // Compare the in-process Zig container / transitional Zopfli backend
-    // with the standalone upstream 1.0.3 CLI.
-    const zzopfli = b.addExecutable(.{
-        .name = "zzopfli",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/zzopfli.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
-    });
-    // zopfli/container.zig reuses the engine's shared adler32.
-    zzopfli.root_module.addImport("zlib-replicant", replicant_mod);
-    addZopfliRuntime(zzopfli.root_module);
-    b.installArtifact(zzopfli);
+    // with the standalone upstream 1.0.3 CLI: the zzopfli tool moved into
+    // the zopfli-replicant package together with the engine and is
+    // installed above.
 
     // Differential harness: feed binary frequency vectors on stdin, print
     // the length-limited Huffman code lengths produced by the native
-    // katajainen.zig port (scripts/diff_katajainen.py compares against
-    // the upstream C kernel).
-    const zkatajainen = b.addExecutable(.{
-        .name = "zkatajainen",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("tools/zkatajainen.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
-    });
-    zkatajainen.root_module.addImport("katajainen", b.createModule(.{
-        .root_source_file = b.path("src/zopfli/katajainen.zig"),
-        .target = target,
-        .optimize = optimize,
-    }));
-    zkatajainen.root_module.link_libc = true;
-    b.installArtifact(zkatajainen);
+    // katajainen.zig port (zopfli-replicant/scripts/diff_katajainen.py
+    // compares against the upstream C kernel): the zkatajainen tool moved
+    // into the zopfli-replicant package and is installed above.
 
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
@@ -114,6 +106,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     unit_tests.root_module.addImport("zlib-replicant", replicant_mod);
+    unit_tests.root_module.addImport("zopfli-replicant", zopfli_mod);
     addZopfliRuntime(unit_tests.root_module);
     const run_unit_tests = b.addRunArtifact(unit_tests);
     const test_step = b.step("test", "Run unit tests");
@@ -126,12 +119,19 @@ pub fn build(b: *std.Build) void {
     if (zlib_replicant.builder.top_level_steps.get("test")) |dep_tests| {
         test_step.dependOn(&dep_tests.step);
     }
+    // The same holds for the zopfli engine's unit tests inside the
+    // zopfli-replicant package (`cd zopfli-replicant && zig build test`
+    // standalone).
+    if (zopfli_replicant.builder.top_level_steps.get("test")) |dep_tests| {
+        test_step.dependOn(&dep_tests.step);
+    }
 }
 
-/// Zopfli's complete pipeline — LZ77 optimization, block splitting,
-/// package-merge code lengths and DEFLATE serialization — is native Zig.
-/// Only libc (malloc/free/log) and libm are linked as runtime support;
-/// no upstream algorithmic C source is compiled into the build.
+/// The zopfli engine (in the zopfli-replicant package) links only libc
+/// (malloc/free/log) and libm as runtime support; no upstream
+/// algorithmic C source is compiled into the build. The flag propagates
+/// from the consuming root modules to the final link of each
+/// executable.
 fn addZopfliRuntime(module: *std.Build.Module) void {
     module.link_libc = true;
     module.linkSystemLibrary("m", .{});

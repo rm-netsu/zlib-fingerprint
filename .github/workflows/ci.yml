@@ -25,6 +25,15 @@ jobs:
         run: zig build test
       - name: Release build
         run: zig build -Doptimize=ReleaseFast
+      # The regression fixtures and the differential suites of the zlib
+      # engine are part of the engine repository, not of the fetched
+      # dependency (the package's zon .paths ships the engine only).
+      # Clone it at the exact tag pinned in build.zig.zon, so the suites
+      # run against the same engine version the build consumes.
+      - name: Clone the zlib-replicant engine repository (differential suites)
+        run: >
+          git clone --depth 1 --branch v0.1.1
+          https://github.com/rm-netsu/zlib-replicant.git zlib-replicant
       - name: Regression fixtures (engines + search, official wrappers off)
         run: python3 zlib-replicant/scripts/regression_check.py --skip-official
       - name: Native miniz + zlib-ng differentials (vs official wrappers)

@@ -172,7 +172,8 @@ pub fn zlibContainerHeader(window_bits_in: u8, level: i32, strategy: u32) u16 {
 /// Zopfli's own zlib container writer (--zlib) emits CMF=0x78 with FLEVEL=3
 /// ("maximum compression"), i.e. the byte pair 0x78 0xDA — verified
 /// empirically against zopfli-1.0.3 and its vendored source
-/// (vendor/zopfli-zopfli-1.0.3/src/zopfli/zlib_container.c).
+/// (zopfli-replicant/binaries/vendor/zopfli-zopfli-1.0.3/src/zopfli/
+/// zlib_container.c).
 /// Note: `--deflate` produces RAW deflate without a zlib container, so it
 /// can never match a zlib stream.
 pub const zopfli_header: u16 = 0x78DA;

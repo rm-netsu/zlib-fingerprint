@@ -39,6 +39,27 @@ fetch() { # fetch <url> <dest-file> (atomic: partial downloads never persist)
     }
 }
 
+# Resolve the in-repo copy of an engine package. Preference order:
+#   1. an engine-repository clone at <clone-name>/ (the layout the
+#      differential suites and the README use — see the CI workflow);
+#   2. the fetched dependency cache under zig-pkg/ (populated by
+#      'zig build'; the directory name embeds the version and hash, so
+#      it must be discovered, never hardcoded — it changes on every
+#      package bump).
+pkg_dir() { # pkg_dir <cache-prefix> <clone-name>
+    local found
+    if [ -d "$CDIR/../$2" ]; then
+        printf '%s\n' "$CDIR/../$2"
+        return 0
+    fi
+    found="$(cd "$CDIR/.." && ls -1d zig-pkg/"$1"-*/ 2>/dev/null | sort -V | tail -n 1)" || true
+    if [ -n "$found" ]; then
+        printf '%s\n' "$CDIR/../${found%/}"
+        return 0
+    fi
+    return 1
+}
+
 # ---------------------------------------------------------------------------
 # zlib family (official versions) — the differential-testing oracles of the
 # zlib-replicant engine package. The wrapper sources and the build recipe
@@ -47,8 +68,15 @@ fetch() { # fetch <url> <dest-file> (atomic: partial downloads never persist)
 # release 1.0.1-1.4) lands in this repository's binaries/ directory for
 # both the package suites and the --external-zlib audit mode.
 # ---------------------------------------------------------------------------
+ZLIB_PKG_DIR="$(pkg_dir zlib_replicant zlib-replicant)" || {
+    echo "error: the zlib-replicant package was not found." >&2
+    echo "  Either run 'zig build' once (this populates zig-pkg/), or clone the" >&2
+    echo "  engine repository next to this one:" >&2
+    echo "    git clone https://github.com/rm-netsu/zlib-replicant.git zlib-replicant" >&2
+    exit 1
+}
 OUT_DIR="$CDIR" VENDOR_DIR="$CDIR/vendor" \
-    bash "$CDIR/../zig-pkg/zlib_replicant-0.1.1-ke6LQ4Y6DwCnsz45zZhdic0plOrjGSvtd6n_pyQjufll/binaries/build-references.sh"
+    bash "$ZLIB_PKG_DIR/binaries/build-references.sh"
 
 # Differential matrix can build only stock zlib releases, without fetching
 # optional third-party implementations.
@@ -75,19 +103,21 @@ if ! check_binary "zlib-ng-2.2.1"; then
 fi
 
 # ---------------------------------------------------------------------------
-# Zopfli 1.0.3
+# Zopfli 1.0.0-1.0.3 (official release CLIs) — the differential-testing
+# oracles of the zopfli-replicant engine package. The vendored untouched
+# 1.0.3 reference tree and the build recipe live IN the package
+# (zopfli-replicant/binaries); this script delegates so one shared set of
+# release CLIs lands in this repository's binaries/ directory. The other
+# releases are fetched from the official tags on demand and verified
+# against the package's binaries/SHA256SUMS.
 # ---------------------------------------------------------------------------
-if ! check_binary "zopfli-1.0.3"; then
-    echo "[zopfli] Building Zopfli 1.0.3..."
-    dir="$VENDOR/zopfli-zopfli-1.0.3"
-    if [ ! -d "$dir" ]; then
-        fetch "https://github.com/google/zopfli/archive/refs/tags/zopfli-1.0.3.tar.gz" "$VENDOR/zopfli-1.0.3.tar.gz"
-        tar -xzf "$VENDOR/zopfli-1.0.3.tar.gz" -C "$VENDOR"
-    fi
-    ( cd "$dir" && make zopfli >/dev/null )
-    cp "$dir/zopfli$EXT" "$CDIR/zopfli-1.0.3$EXT"
-    echo "-> built zopfli-1.0.3$EXT"
-fi
+ZOPFLI_PKG_DIR="$(pkg_dir zopfli_replicant zopfli-replicant)" || {
+    echo "error: the zopfli-replicant package was not found." >&2
+    echo "  Expected the in-tree package directory 'zopfli-replicant/'." >&2
+    exit 1
+}
+OUT_DIR="$CDIR" VENDOR_DIR="$CDIR/vendor" \
+    bash "$ZOPFLI_PKG_DIR/binaries/build-references.sh"
 
 # ---------------------------------------------------------------------------
 # libdeflate 1.20 (plain make, no cmake needed)

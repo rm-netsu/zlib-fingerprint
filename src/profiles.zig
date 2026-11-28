@@ -19,7 +19,7 @@
 //! deferred. zlib-ng is independently distinct and remains external.
 
 const std = @import("std");
-const zopfli_release = @import("zopfli/release.zig");
+const zopfli_release = @import("zopfli-replicant");
 
 pub const ImplType = enum {
     /// Built-in modern Zig deflate, or statically linked historical A-D C
